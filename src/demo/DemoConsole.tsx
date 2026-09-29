@@ -1,0 +1,438 @@
+"use client";
+
+import { ExternalLink, Loader2, RotateCcw, ScanLine, Smartphone, Wifi, WifiOff } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Logo } from "@/components/ui";
+import { parseCsv } from "@/lib/csv";
+import { DEMO_STUDENTS } from "./client";
+
+const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+const REPO_URL = "https://github.com/RithikhC/CampusOPS";
+
+const PHONE = { w: 390, h: 844, scale: 0.86 };
+const LAPTOP = { w: 1280, h: 870, scale: 0.78 };
+const GAP = 48;
+const PAD = 40;
+// Frame widths include the device bezels (phone: 10px each side, laptop: 8px each side).
+const PHONE_FRAME_W = PHONE.w * PHONE.scale + 20;
+const LAPTOP_FRAME_W = LAPTOP.w * LAPTOP.scale + 16;
+const DESIGN_W = PAD * 2 + PHONE_FRAME_W * 2 + LAPTOP_FRAME_W + GAP * 2;
+
+type Device = "student" | "guard" | "admin";
+
+function subscribeResize(callback: () => void) {
+  window.addEventListener("resize", callback);
+  return () => window.removeEventListener("resize", callback);
+}
+
+export default function DemoConsole() {
+  const [present] = useState(() => new URLSearchParams(window.location.search).has("present"));
+  const [backend] = useState(() => {
+    window.__nightpassBackend ??= import("./backend").then((m) => m.createBackend());
+    return window.__nightpassBackend;
+  });
+  const [ready, setReady] = useState(false);
+  const [studentId, setStudentId] = useState(DEMO_STUDENTS[0].id);
+  const [offline, setOfflineState] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [caption, setCaption] = useState<string | null>(null);
+  const [chapter, setChapter] = useState<string | null>(null);
+  const [highlight, setHighlight] = useState<Device | null>(null);
+  const [csv, setCsv] = useState<string[][] | null>(null);
+  const [taps, setTaps] = useState<{ id: number; x: number; y: number }[]>([]);
+  const width = useSyncExternalStore(subscribeResize, () => window.innerWidth, () => 1440);
+
+  const stageRef = useRef<HTMLDivElement>(null);
+  const studentFrame = useRef<HTMLIFrameElement>(null);
+  const guardFrame = useRef<HTMLIFrameElement>(null);
+  const adminFrame = useRef<HTMLIFrameElement>(null);
+  const frameFor = useCallback(
+    (device: Device) => ({ student: studentFrame, guard: guardFrame, admin: adminFrame })[device].current,
+    [],
+  );
+
+  useEffect(() => {
+    void backend.then(() => setReady(true));
+  }, [backend]);
+
+  const frameWindow = useCallback(
+    (device: Device) => (frameFor(device)?.contentWindow ?? null) as (Window & typeof globalThis) | null,
+    [frameFor],
+  );
+
+  const find = useCallback(
+    (device: Device, target: string): HTMLElement | null => {
+      const doc = frameWindow(device)?.document;
+      if (!doc) return null;
+      if (/^[.#[]/.test(target)) return doc.querySelector<HTMLElement>(target);
+      const candidates = [...doc.querySelectorAll<HTMLElement>("button, a, label, [role=tab], li button")];
+      return (
+        candidates.find((el) => el.textContent?.trim() === target) ??
+        candidates.find((el) => el.textContent?.trim().startsWith(target)) ??
+        candidates.find((el) => el.textContent?.includes(target)) ??
+        null
+      );
+    },
+    [frameWindow],
+  );
+
+  /** Shows a tap ripple over the element, then clicks it. */
+  const tap = useCallback(
+    async (device: Device, target: string) => {
+      const el = find(device, target);
+      const frame = frameFor(device);
+      const stage = stageRef.current;
+      if (!el || !frame || !stage) return false;
+      el.scrollIntoView({ block: "nearest" });
+      const frameRect = frame.getBoundingClientRect();
+      const stageRect = stage.getBoundingClientRect();
+      const frameScale = frameRect.width / frame.offsetWidth;
+      const stageScale = stageRect.width / stage.offsetWidth;
+      const r = el.getBoundingClientRect();
+      const x = (frameRect.left + (r.left + r.width / 2) * frameScale - stageRect.left) / stageScale;
+      const y = (frameRect.top + (r.top + r.height / 2) * frameScale - stageRect.top) / stageScale;
+      const id = Date.now() + Math.random();
+      setTaps((list) => [...list, { id, x, y }]);
+      window.setTimeout(() => setTaps((list) => list.filter((t) => t.id !== id)), 900);
+      await new Promise((resolve) => window.setTimeout(resolve, 260));
+      el.click();
+      return true;
+    },
+    [find, frameFor],
+  );
+
+  const typeText = useCallback(
+    async (device: Device, selector: string, text: string) => {
+      const win = frameWindow(device);
+      const input = win?.document.querySelector<HTMLInputElement>(selector);
+      if (!win || !input) return false;
+      input.focus();
+      const setValue = Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!;
+      for (let i = 1; i <= text.length; i++) {
+        setValue.call(input, text.slice(0, i));
+        input.dispatchEvent(new win.Event("input", { bubbles: true }));
+        await new Promise((resolve) => window.setTimeout(resolve, 70));
+      }
+      return true;
+    },
+    [frameWindow],
+  );
+
+  const setOffline = useCallback(
+    (value: boolean) => {
+      const win = frameWindow("guard");
+      if (!win) return;
+      win.__nightpassOffline = value;
+      win.dispatchEvent(new win.Event(value ? "offline" : "online"));
+      setOfflineState(value);
+    },
+    [frameWindow],
+  );
+
+  /** Holds the current student's pass (or an old screenshot of it) up to the guard's camera. */
+  const showPass = useCallback(
+    async (periodsAgo = 0, who = studentId) => {
+      const guard = frameWindow("guard");
+      if (!guard) return;
+      if (find("guard", "Start scanning")) {
+        await tap("guard", "Start scanning");
+        await new Promise((resolve) => window.setTimeout(resolve, 900));
+      }
+      const code = (await backend).passCode(who, periodsAgo);
+      guard.__nightpassCamera?.show(code);
+    },
+    [backend, find, frameWindow, studentId, tap],
+  );
+
+  const showCsv = useCallback(
+    async (kind: "records" | "missing") => {
+      const api = await backend;
+      const warden = { id: "admin-1", name: "Warden", role: "admin" as const };
+      const overview = JSON.parse((await api.handle(warden, "GET", "/api/admin/overview", null)).body);
+      const result = await api.handle(warden, "GET", `/api/admin/export?kind=${kind}&rollCallId=${overview.rollCall.id}`, null);
+      setCsv(parseCsv(result.body.replace(/^﻿/, "")).slice(0, 13));
+    },
+    [backend],
+  );
+
+  /** Moves tonight's curfew (campus time "HH:MM") and reloads the three screens. */
+  const setCurfew = useCallback(
+    async (time: string) => {
+      const api = await backend;
+      const warden = { id: "admin-1", name: "Warden", role: "admin" as const };
+      const overview = JSON.parse((await api.handle(warden, "GET", "/api/admin/overview", null)).body);
+      await api.handle(warden, "POST", "/api/admin/rollcall", JSON.stringify({ action: "curfew", rollCallId: overview.rollCall.id, time }));
+      setReloadKey((k) => k + 1);
+    },
+    [backend],
+  );
+
+  const reset = useCallback(async () => {
+    await (await backend).reset();
+    try {
+      Object.keys(window.localStorage)
+        .filter((key) => key.startsWith("np_"))
+        .forEach((key) => window.localStorage.removeItem(key));
+    } catch {
+      // Storage blocked: nothing cached to clear.
+    }
+    setOffline(false);
+    setReloadKey((k) => k + 1);
+  }, [backend, setOffline]);
+
+  // Controls for the recording script (and handy in the browser console).
+  useEffect(() => {
+    const director = {
+      tap,
+      type: typeText,
+      showPass,
+      showCsv,
+      hideCsv: () => setCsv(null),
+      setStudent: setStudentId,
+      setOffline,
+      caption: setCaption,
+      chapter: setChapter,
+      highlight: setHighlight,
+      reset,
+      setCurfew,
+      scroll: (device: Device, y: number) => frameWindow(device)?.scrollTo({ top: y, behavior: "smooth" }),
+      ready: () => backend.then(() => true),
+    };
+    (window as unknown as { __nightpassDirector: typeof director }).__nightpassDirector = director;
+  }, [tap, typeText, showPass, showCsv, setOffline, reset, setCurfew, frameWindow, backend]);
+
+  const scale = Math.min(present ? 2 : 1.1, (width - (present ? 0 : 32)) / DESIGN_W);
+  const small = !present && width < 900;
+  const studentName = DEMO_STUDENTS.find((s) => s.id === studentId)?.name ?? "";
+
+  const stage = (
+    <div style={{ height: 800 * scale }} className="relative">
+      <div
+        ref={stageRef}
+        className="absolute top-0 left-1/2 flex items-start"
+        style={{ width: DESIGN_W, padding: `0 ${PAD}px`, gap: GAP, transform: `translateX(-50%) scale(${scale})`, transformOrigin: "top center" }}
+      >
+        <DeviceFrame label="Student's phone" dim={highlight !== null && highlight !== "student"} lit={highlight === "student"}>
+          <Phone>
+            <iframe key={`s-${studentId}-${reloadKey}`} ref={studentFrame} title="Student pass" src={`${BASE_PATH}/student/?id=${studentId}`} style={phoneFrameStyle} />
+          </Phone>
+        </DeviceFrame>
+        <DeviceFrame label="Guard's phone" dim={highlight !== null && highlight !== "guard"} lit={highlight === "guard"}>
+          <Phone>
+            <iframe key={`g-${reloadKey}`} ref={guardFrame} title="Guard scanner" src={`${BASE_PATH}/guard/`} style={phoneFrameStyle} />
+          </Phone>
+        </DeviceFrame>
+        <DeviceFrame label="Warden's dashboard" dim={highlight !== null && highlight !== "admin"} lit={highlight === "admin"}>
+          <div className="overflow-hidden rounded-xl bg-[#1a1d24] p-2 shadow-2xl ring-1 ring-white/10">
+            <div className="flex gap-1.5 px-2 pb-2" aria-hidden>
+              <span className="size-2.5 rounded-full bg-white/15" />
+              <span className="size-2.5 rounded-full bg-white/15" />
+              <span className="size-2.5 rounded-full bg-white/15" />
+            </div>
+            <div className="overflow-hidden rounded-md" style={{ width: LAPTOP.w * LAPTOP.scale, height: LAPTOP.h * LAPTOP.scale }}>
+              <iframe
+                key={`a-${reloadKey}`}
+                ref={adminFrame}
+                title="Warden dashboard"
+                src={`${BASE_PATH}/admin/`}
+                style={{ width: LAPTOP.w, height: LAPTOP.h, border: 0, transform: `scale(${LAPTOP.scale})`, transformOrigin: "top left" }}
+              />
+            </div>
+          </div>
+        </DeviceFrame>
+
+        {taps.map((t) => (
+          <span
+            key={t.id}
+            className="pointer-events-none absolute size-14 animate-ping rounded-full bg-white/60 ring-4 ring-white/80"
+            style={{ left: t.x - 28, top: t.y - 28 }}
+          />
+        ))}
+      </div>
+
+      {!ready && (
+        <div className="absolute inset-0 grid place-items-center bg-[#0b1120]/80">
+          <span className="flex items-center gap-2 text-lg text-white">
+            <Loader2 className="size-5 animate-spin" aria-hidden /> Loading the demo database…
+          </span>
+        </div>
+      )}
+    </div>
+  );
+
+  if (present) {
+    return (
+      <main className="relative flex min-h-dvh flex-col bg-[#0b1120] text-white">
+        <div className="flex h-24 items-center justify-center">
+          {chapter && <span className="rounded-full bg-white/10 px-5 py-2 text-2xl font-medium">{chapter}</span>}
+        </div>
+        {stage}
+        <div className="flex flex-1 items-center justify-center px-10 pb-6">
+          {caption && (
+            <p key={caption} className="animate-result max-w-[1500px] rounded-2xl bg-black/60 px-8 py-4 text-center text-[34px] leading-snug font-medium">
+              {caption}
+            </p>
+          )}
+        </div>
+        {csv && <CsvPreview rows={csv} onClose={() => setCsv(null)} />}
+      </main>
+    );
+  }
+
+  return (
+    <main className="min-h-dvh bg-[#0b1120] pb-10 text-white">
+      <header className="mx-auto flex max-w-[1800px] flex-wrap items-center justify-between gap-4 px-4 py-5 sm:px-6">
+        <Logo subtitle="Live demo: hostel night attendance" />
+        <a href={REPO_URL} className="inline-flex items-center gap-1.5 text-sm text-[#93c5fd] hover:underline">
+          Source code and docs <ExternalLink className="size-4" aria-hidden />
+        </a>
+      </header>
+
+      <section className="mx-auto max-w-[1800px] px-4 sm:px-6">
+        <p className="max-w-3xl text-[#c7cfdd]">
+          This is the real NightPass app with sample data, running entirely in your browser. Press{" "}
+          <strong className="text-white">Hold pass up to scanner</strong> and watch the guard&apos;s phone, the student&apos;s
+          phone and the warden&apos;s dashboard. You can also tap around inside any of the three screens.
+        </p>
+
+        {!small && (
+          <div className="mt-5 flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 rounded-lg bg-white/5 px-3 py-2 text-sm ring-1 ring-white/10">
+              Student
+              <select
+                value={studentId}
+                onChange={(e) => setStudentId(e.target.value)}
+                className="bg-transparent font-medium outline-none"
+                aria-label="Which student"
+              >
+                {DEMO_STUDENTS.map((s) => (
+                  <option key={s.id} value={s.id} className="bg-[#131b2e]">
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button onClick={() => showPass(0)} disabled={!ready} className={`${controlBtn} bg-[#2563eb] text-white hover:bg-[#1d4ed8]`}>
+              <ScanLine className="size-4" aria-hidden /> Hold {studentName.split(" ")[0]}&apos;s pass up to scanner
+            </button>
+            <button onClick={() => showPass(6)} disabled={!ready} className={`${controlBtn} bg-white/10 hover:bg-white/15`}>
+              Try an old screenshot instead
+            </button>
+            <button onClick={() => setOffline(!offline)} disabled={!ready} className={`${controlBtn} bg-white/10 hover:bg-white/15`}>
+              {offline ? <WifiOff className="size-4 text-[#fbbf24]" aria-hidden /> : <Wifi className="size-4" aria-hidden />}
+              {offline ? "Guard phone is offline (tap to reconnect)" : "Take guard phone offline"}
+            </button>
+            <button onClick={reset} disabled={!ready} className={`${controlBtn} text-[#c7cfdd] hover:bg-white/10`}>
+              <RotateCcw className="size-4" aria-hidden /> Reset demo
+            </button>
+          </div>
+        )}
+      </section>
+
+      {small ? (
+        <section className="mx-auto mt-6 flex max-w-md flex-col gap-3 px-4">
+          <p className="text-sm text-[#c7cfdd]">
+            On a phone, open one screen at a time. Try the guard scanner on one phone and a student pass on another: the
+            scanner will read it with the real camera.
+          </p>
+          {[
+            { href: "/student/", title: "Student pass", text: "The rotating QR code" },
+            { href: "/guard/", title: "Gate scanner", text: "Uses your camera" },
+            { href: "/admin/", title: "Warden dashboard", text: "Best on a laptop" },
+          ].map((link) => (
+            <a key={link.href} href={`${BASE_PATH}${link.href}`} className="flex items-center gap-3 rounded-xl bg-white/5 p-4 ring-1 ring-white/10">
+              <Smartphone className="size-5 text-[#93c5fd]" aria-hidden />
+              <span>
+                <span className="block font-medium">{link.title}</span>
+                <span className="block text-sm text-[#c7cfdd]">{link.text}</span>
+              </span>
+            </a>
+          ))}
+        </section>
+      ) : (
+        <div className="mt-8">{stage}</div>
+      )}
+
+      {!small && (
+        <p className="mx-auto mt-6 max-w-[1800px] px-4 text-sm text-[#8b95a8] sm:px-6">
+          The guard phone here uses a simulated camera, because a webcam can&apos;t see a phone drawn on the same screen. Open
+          the{" "}
+          <a className="underline" href={`${BASE_PATH}/guard/`}>
+            gate scanner
+          </a>{" "}
+          on a real phone to scan with its camera, and a{" "}
+          <a className="underline" href={`${BASE_PATH}/student/`}>
+            student pass
+          </a>{" "}
+          on another phone.
+        </p>
+      )}
+      {csv && <CsvPreview rows={csv} onClose={() => setCsv(null)} />}
+    </main>
+  );
+}
+
+const controlBtn = "inline-flex h-10 items-center gap-2 rounded-lg px-3.5 text-sm font-medium disabled:opacity-50";
+const phoneFrameStyle = {
+  width: PHONE.w,
+  height: PHONE.h,
+  border: 0,
+  transform: `scale(${PHONE.scale})`,
+  transformOrigin: "top left",
+} as const;
+
+function DeviceFrame({ label, dim, lit, children }: { label: string; dim: boolean; lit: boolean; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-3 transition-opacity duration-500" style={{ opacity: dim ? 0.35 : 1 }}>
+      <div className={`text-center text-lg font-medium ${lit ? "text-white" : "text-[#8b95a8]"}`}>{label}</div>
+      <div className={`rounded-[50px] transition-shadow duration-500 ${lit ? "shadow-[0_0_0_6px_rgba(96,165,250,0.55)]" : ""}`}>{children}</div>
+    </div>
+  );
+}
+
+function Phone({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="rounded-[50px] bg-[#16181d] p-[10px] shadow-2xl ring-1 ring-white/10">
+      <div className="overflow-hidden rounded-[40px]" style={{ width: PHONE.w * PHONE.scale, height: PHONE.h * PHONE.scale }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function CsvPreview({ rows, onClose }: { rows: string[][]; onClose: () => void }) {
+  const [header, ...body] = rows;
+  const cols = [0, 1, 3, 4, 5, 7, 9, 10];
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-6" onClick={onClose}>
+      <div className="w-full max-w-[1500px] overflow-hidden rounded-xl bg-white text-[#1b2230] shadow-2xl">
+        <div className="flex items-center justify-between bg-[#107c41] px-5 py-3 text-white">
+          <span className="text-lg font-semibold">nightpass-records.csv</span>
+          <span className="text-sm opacity-90">Exported from NightPass, opens in Excel</span>
+        </div>
+        <table className="w-full border-collapse text-left text-[17px]">
+          <thead>
+            <tr className="bg-[#f1f3f5]">
+              {cols.map((c) => (
+                <th key={c} className="border border-[#d9dde3] px-3 py-2 font-semibold">
+                  {header?.[c]}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {body.map((row, i) => (
+              <tr key={i}>
+                {cols.map((c) => (
+                  <td key={c} className="max-w-[420px] truncate border border-[#d9dde3] px-3 py-1.5">
+                    {row[c]}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}

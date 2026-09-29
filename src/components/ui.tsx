@@ -67,14 +67,18 @@ export function Card({ children, className = "" }: { children: ReactNode; classN
   return <div className={`rounded-xl border border-line bg-surface ${className}`}>{children}</div>;
 }
 
+export const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+
 export function LogoutButton({ compact = false }: { compact?: boolean }) {
   const [busy, setBusy] = useState(false);
+  // Inside the demo page's phone frames there's nothing to sign out of.
+  if (typeof window !== "undefined" && window.self !== window.top) return null;
   return (
     <button
       onClick={async () => {
         setBusy(true);
         await fetch("/api/auth/logout", { method: "POST" });
-        window.location.replace("/");
+        window.location.replace(`${BASE_PATH}/`);
       }}
       disabled={busy}
       className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-text"

@@ -18,7 +18,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { keepScreenOn, signal, unlockAudio } from "@/components/feedback";
 import { Scanner } from "@/components/Scanner";
-import { Avatar, LogoutButton, Logo, ResultBadge, storage, uid } from "@/components/ui";
+import { Avatar, BASE_PATH, LogoutButton, Logo, ResultBadge, storage, uid } from "@/components/ui";
 import { fromHex, parsePass } from "@/lib/pass";
 import type { GuardBootstrap } from "@/lib/queries";
 import type { IncomingScan, ScanOutcome } from "@/lib/scans";
@@ -93,7 +93,7 @@ export function GuardApp({ guardName }: { guardName: string }) {
     try {
       const response = await fetch("/api/guard/bootstrap", { cache: "no-store" });
       if (response.status === 401) {
-        window.location.replace("/");
+        window.location.replace(`${BASE_PATH}/`);
         return;
       }
       if (!response.ok) throw new Error("bootstrap failed");
@@ -499,7 +499,7 @@ function RoundButton({ label, onClick, active, children }: { label: string; onCl
       onClick={onClick}
       aria-label={label}
       aria-pressed={active}
-      className={`grid size-14 place-items-center rounded-full backdrop-blur ${active ? "bg-warn text-black" : "bg-black/50 text-white"}`}
+      className={`grid size-14 place-items-center rounded-full ${active ? "bg-warn text-black" : "bg-black/60 text-white"}`}
     >
       {children}
     </button>

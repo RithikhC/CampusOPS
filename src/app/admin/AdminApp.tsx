@@ -3,7 +3,7 @@
 import { AlertTriangle, CircleCheck, Clock, ScanLine, ShieldX, UserX } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { Card, LogoutButton, Logo } from "@/components/ui";
+import { BASE_PATH, Card, LogoutButton, Logo } from "@/components/ui";
 import type { AdminOverview } from "@/lib/queries";
 import { formatClock, formatDate } from "@/lib/time";
 import { FeedTab, FlagsTab, MissingTab, RecordsTab, RollCallTab, RosterTab } from "./tabs";
@@ -21,7 +21,7 @@ export function AdminApp({ adminName, demoMode }: { adminName: string; demoMode:
     try {
       const response = await fetch(`/api/admin/overview${rollCallId ? `?rollCallId=${rollCallId}` : ""}`, { cache: "no-store" });
       if (response.status === 401) {
-        window.location.replace("/");
+        window.location.replace(`${BASE_PATH}/`);
         return;
       }
       if (!response.ok) throw new Error((await response.json()).error ?? "Failed to load");

@@ -8,6 +8,17 @@ import type { RollCall } from "@/lib/rollcall";
 import { formatClock, formatDate, toTimeInput } from "@/lib/time";
 import { RESULT_META } from "@/lib/verify";
 
+/** Fetches a CSV export and saves it as a file (works with the server and with the browser demo). */
+async function downloadCsv(url: string, filename: string) {
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) return;
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(await response.blob());
+  link.download = filename;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+
 const input = "h-10 rounded-lg bg-surface px-3 text-sm ring-1 ring-line outline-none focus:ring-brand";
 const button = "inline-flex h-10 items-center justify-center gap-1.5 rounded-lg px-3 text-sm font-medium";
 
@@ -109,9 +120,12 @@ export function MissingTab({ missing, rollCallId }: { missing: MissingStudent[];
             <option key={h}>{h}</option>
           ))}
         </select>
-        <a href={`/api/admin/export?kind=missing&rollCallId=${rollCallId}`} className={`${button} bg-surface-2 ring-1 ring-line hover:ring-brand`}>
+        <button
+          onClick={() => downloadCsv(`/api/admin/export?kind=missing&rollCallId=${rollCallId}`, "nightpass-not-back-yet.csv")}
+          className={`${button} bg-surface-2 ring-1 ring-line hover:ring-brand`}
+        >
           <Download className="size-4" aria-hidden /> Export CSV
-        </a>
+        </button>
         {attempts > 0 && (
           <span className="flex items-center gap-1.5 text-sm text-warn">
             <AlertTriangle className="size-4" aria-hidden />
@@ -306,9 +320,9 @@ export function RecordsTab({ rollCalls, defaultRollCallId, hostels }: { rollCall
             <option key={h}>{h}</option>
           ))}
         </select>
-        <a href={`/api/admin/export?kind=records&${query}`} className={`${button} bg-brand-strong text-white`}>
+        <button onClick={() => downloadCsv(`/api/admin/export?kind=records&${query}`, "nightpass-records.csv")} className={`${button} bg-brand-strong text-white`}>
           <Download className="size-4" aria-hidden /> Export CSV
-        </a>
+        </button>
         {records && <span className="text-sm text-muted">{records.length === 300 ? "Showing latest 300" : `${records.length} records`}</span>}
       </div>
       {records ? (

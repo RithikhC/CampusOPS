@@ -36,7 +36,7 @@ export function ManualEntry({ roster, findPresence, onManual, onCode, onClose }:
   }, [query, roster]);
 
   return (
-    <div className="fixed inset-0 z-30 flex flex-col bg-bg/95 backdrop-blur" role="dialog" aria-modal="true" aria-label="Manual entry">
+    <div className="fixed inset-0 z-30 flex flex-col bg-bg" role="dialog" aria-modal="true" aria-label="Manual entry">
       <div className="mx-auto flex w-full max-w-md flex-1 flex-col gap-4 overflow-y-auto p-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Manual entry</h2>
