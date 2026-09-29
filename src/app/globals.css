@@ -1,0 +1,102 @@
+@import "tailwindcss";
+
+/*
+ * Two themes on purpose:
+ *  - dark (default) for the gate scanner and the student pass, which are used outside at night
+ *  - light (.theme-light) for the sign-in page and the warden dashboard, which are used indoors
+ */
+:root {
+  --bg: #0b1120;
+  --surface: #131b2e;
+  --surface-2: #1b2540;
+  --line: #28334f;
+  --text: #e6e9ef;
+  --muted: #9aa3b5;
+  --brand: #60a5fa;
+  --brand-strong: #2563eb;
+  --ok: #22c55e;
+  --warn: #f59e0b;
+  --bad: #ef4444;
+  color-scheme: dark;
+}
+
+.theme-light {
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #eef0f3;
+  --line: #dcdfe5;
+  --text: #1b2230;
+  --muted: #5f6879;
+  --brand: #1d4ed8;
+  --brand-strong: #1d4ed8;
+  --ok: #15803d;
+  --warn: #b45309;
+  --bad: #b91c1c;
+  color-scheme: light;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Match the page chrome (scrollbar, overscroll) to the light screens. */
+:root:has(.theme-light) {
+  color-scheme: light;
+  background: #f4f5f7;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-brand: var(--brand);
+  --color-brand-strong: var(--brand-strong);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  -webkit-tap-highlight-color: transparent;
+}
+
+@keyframes result-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-result {
+  animation: result-in 120ms ease-out;
+}
+
+@keyframes scanline {
+  0%,
+  100% {
+    top: 8%;
+  }
+  50% {
+    top: 88%;
+  }
+}
+
+.animate-scanline {
+  animation: scanline 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-result,
+  .animate-scanline {
+    animation: none;
+  }
+}
