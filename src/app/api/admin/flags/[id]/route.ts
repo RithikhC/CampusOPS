@@ -4,7 +4,7 @@ import { authorize } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 
 /** Marks a flagged scan as followed up, with a note. */
-export async function POST(request: NextRequest, ctx: RouteContext<"/api/admin/flags/[id]">) {
+export async function POST(request: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const user = await authorize(["admin"]);
   if (user instanceof NextResponse) return user;
 
