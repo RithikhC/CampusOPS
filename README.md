@@ -4,8 +4,10 @@ Night attendance for hostels, built for the CampusOps Hackathon (Problem Stateme
 
 Students show a QR pass on their phone at the hostel gate, security scans it with any phone, and the warden sees who is back and who isn't.
 
-**Demo video:** _add link here_
-**Live demo:** _add link here_
+**Live demo:** https://rithikhc.github.io/CampusOPS/ (opens in any browser, nothing to install)
+**Demo video (2:48):** [docs/NightPass-demo.mp4](docs/NightPass-demo.mp4)
+
+The live demo shows the student's phone, the guard's phone and the warden's dashboard side by side. Press **Hold pass up to scanner** to watch a check-in go through all three. It's the same app running entirely in your browser with sample data, so every visitor gets their own copy and nothing is shared. You can also open the [gate scanner](https://rithikhc.github.io/CampusOPS/guard/) on one phone and a [student pass](https://rithikhc.github.io/CampusOPS/student/) on another, and scan with the real camera.
 
 ![Warden dashboard](docs/screenshots/admin-dashboard.png)
 
@@ -74,12 +76,14 @@ Before recording a demo, go to **Settings** on the warden dashboard and press **
 | `npm run lint` and `npm run typecheck` | Code checks |
 | `npm run build` then `npm start` | Production build |
 | `npm run keys` | Generates the secret keys needed when deploying |
+| `npm run build:pages` then `npm run preview:pages` | Builds the browser-only demo (the GitHub Pages version) and serves it at http://localhost:4000/CampusOPS/ |
 
 ## Documents
 
 - [Technical overview](docs/TECHNICAL.md): architecture, how the QR pass works, scan rules, offline sync, data model, API and security
 - [Deployment guide](docs/DEPLOYMENT.md): Vercel with a free Postgres database, any Node host, Docker, and testing on a phone
-- [Demo video plan](docs/DEMO_SCRIPT.md): the scene-by-scene plan and narration for our 3-minute video
+- [Demo video](docs/NightPass-demo.mp4): 2 minutes 48 seconds, with captions
+- [Demo video plan](docs/DEMO_SCRIPT.md): the scenes in the video, and a plan for recording it again with real phones
 
 ## Tech stack
 
@@ -89,6 +93,7 @@ Before recording a demo, go to **Settings** on the warden dashboard and press **
 - **Scanning**: the browser's built-in barcode detector where it exists (Android), and `jsQR` everywhere else (iPhone).
 - **Tailwind CSS** for styling, `lucide-react` icons, `jose` for signed session cookies.
 - **Vitest** for tests, ESLint, and a GitHub Actions workflow that runs lint, type check, tests and a build on every push.
+- **GitHub Pages demo**: a static build of the same screens where the API runs in the browser on PGlite (Postgres compiled to WebAssembly). A second workflow republishes it on every push. See [the technical overview](docs/TECHNICAL.md#the-browser-demo-github-pages).
 
 ## Project layout
 
@@ -109,9 +114,10 @@ src/
     admin.ts            warden actions (resolve, curfew, import)
     db.ts, schema.ts    database connection and tables
     seed.ts             demo data
+  demo/                 browser-only demo: in-browser API, simulated camera, side-by-side page
   proxy.ts              blocks pages a role shouldn't see
 tests/                  unit tests
-docs/                   technical overview, deployment guide, video plan
+docs/                   technical overview, deployment guide, demo video and plan
 ```
 
 ## Privacy and security

@@ -164,6 +164,22 @@ erDiagram
 | Spreadsheet formulas in exported data | Any cell starting with `=`, `+`, `-` or `@` gets a `'` in front. |
 | A guard's phone is lost | Sessions expire after 12 hours. The phone only holds names, IDs, blocks and rooms, and it can't create passes. |
 
+## The browser demo (GitHub Pages)
+
+The live demo at https://rithikhc.github.io/CampusOPS/ has no server. It's a static export of the same screens (`npm run build:pages`), and the API runs in the visitor's browser:
+
+- `next.config.ts` switches to a static export when `NIGHTPASS_STATIC=1`. In that mode it only picks up files ending in `.demo.tsx`, so the server-only pages and API routes are left out.
+- `src/demo/client.ts` intercepts `fetch("/api/...")` calls. The student, guard and warden screens are unchanged and don't know they're in a demo.
+- `src/demo/backend.ts` answers those calls with the same functions the server uses (`queries.ts`, `scans.ts`, `admin.ts`, `verify.ts`) on top of PGlite, which is Postgres compiled to WebAssembly and loaded from a CDN. Every visitor gets a fresh copy of the demo data.
+- `src/demo/DemoConsole.tsx` shows the three screens side by side in frames that share one in-browser database. So a scan on the guard phone updates the student's phone and the dashboard, just like with the real server.
+- Inside the demo page, the guard phone uses a simulated camera (`src/demo/camera.ts`) that draws a phone holding up a pass. The scanner decodes it with the same code it uses for a real camera. Opened on its own on a phone, the guard page uses the real camera.
+
+Two things we measured while building it:
+- Running PGlite in a Web Worker made every query 7 to 10 times slower (the dashboard went from ~75 ms to ~700 ms), so it runs in the page.
+- Inserting the demo data as one JSON value per table (`json_to_recordset`) instead of thousands of parameters cut first load from about 24 s to about 13 s.
+
+The demo video was recorded from this page in presentation mode (`?present`), which hides the controls and shows captions.
+
 ## Moving from prototype to production
 
 | In the prototype | In a real rollout |

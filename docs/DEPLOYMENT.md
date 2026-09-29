@@ -4,6 +4,7 @@ NightPass is a normal Next.js app with a Postgres database. Pick whichever optio
 
 | Option | Cost | Data | Good for |
 | --- | --- | --- | --- |
+| [GitHub Pages (browser-only demo)](#option-0-github-pages-browser-only-demo) | Free, no accounts beyond GitHub | Sample data in each visitor's browser | Letting judges try it instantly |
 | [Vercel + Neon](#option-1-vercel--neon) | Free tiers | Permanent Postgres | A public demo link |
 | [Any Node host](#option-2-any-node-host) | Free tier or a small server | Postgres, or the built-in database | A campus server |
 | [Docker](#option-3-docker) | Your own server | Postgres, or the built-in database on a volume | The university's data centre |
@@ -26,6 +27,21 @@ npm run keys
 Keep `QR_SIGNING_KEY` the same once you've set it. If it changes, the passes already on students' phones stop working until they refresh (which happens by itself within a minute if they're online).
 
 The tables are created automatically on the first start, and demo data is added if there are no students yet. There's no separate migration step.
+
+## Option 0: GitHub Pages (browser-only demo)
+
+This is how https://rithikhc.github.io/CampusOPS/ is published. There's no server: the app and its database run in the visitor's browser with sample data (see the [technical overview](TECHNICAL.md#the-browser-demo-github-pages)).
+
+- **Automatic:** `.github/workflows/pages.yml` builds the demo and pushes it to the `gh-pages` branch on every push to `main`. In the repository's **Settings > Pages**, the source should be **Deploy from a branch**, branch `gh-pages`, folder `/ (root)`.
+- **By hand:**
+
+  ```bash
+  npm run build:pages
+  ```
+
+  Then publish the `out` folder (it already contains the `.nojekyll` file GitHub Pages needs). For a repository with a different name, set `NIGHTPASS_BASE_PATH=/<repo-name>` before building.
+
+To try the build locally, run `npm run preview:pages` and open http://localhost:4000/CampusOPS/.
 
 ## Option 1: Vercel + Neon
 
