@@ -5,13 +5,9 @@
  */
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { SCHEMA_SQL } from "./schema";
-import { seedDemoData } from "./seed";
+import { prepareDb, type Db } from "./dbcore";
 
-export interface Db {
-  query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]>;
-  exec(sql: string): Promise<void>;
-}
+export type { Db } from "./dbcore";
 
 const globalForDb = globalThis as unknown as { __nightpassDb?: Promise<Db> };
 
@@ -25,9 +21,7 @@ export function getDb(): Promise<Db> {
 
 async function open(): Promise<Db> {
   const db = process.env.DATABASE_URL ? await openPostgres(process.env.DATABASE_URL) : await openPglite();
-  await db.exec(SCHEMA_SQL);
-  const [{ count }] = await db.query<{ count: number }>("select count(*)::int as count from students");
-  if (count === 0) await seedDemoData(db);
+  await prepareDb(db);
   return db;
 }
 
@@ -63,8 +57,4 @@ async function openPglite(): Promise<Db> {
       await pg.exec(sql);
     },
   };
-}
-
-export function isUniqueViolation(error: unknown): boolean {
-  return typeof error === "object" && error !== null && (error as { code?: string }).code === "23505";
 }

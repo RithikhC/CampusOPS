@@ -1,12 +1,15 @@
-/** Server configuration. Every value has a safe local default so `npm run dev` works with zero setup. */
-import { createHash } from "node:crypto";
+/**
+ * App configuration. Every value has a safe default so `npm run dev` works with no setup.
+ * No Node-only imports, so the browser demo (GitHub Pages) can use the same code.
+ */
+import { sha256 } from "@noble/hashes/sha2.js";
 import { fromHex, publicKeyFor, toHex } from "./pass";
 
 function devFallback(name: string, derivedFrom: string): Uint8Array {
   if (process.env.NODE_ENV === "production" && process.env.DEMO_MODE === "false") {
     throw new Error(`${name} must be set in production`);
   }
-  return createHash("sha256").update(derivedFrom).digest();
+  return sha256(new TextEncoder().encode(derivedFrom));
 }
 
 function qrSigningKey(): Uint8Array {
@@ -18,9 +21,9 @@ function qrSigningKey(): Uint8Array {
 const signingKey = qrSigningKey();
 
 export const config = {
-  /** Ed25519 private key that mints student passes. Never leaves the server. */
+  /** Ed25519 private key that creates student passes. Never sent to scanners. */
   qrSigningKey: signingKey,
-  /** Public half, handed to scanners so they can verify passes offline. */
+  /** Public half, given to scanners so they can check passes offline. */
   qrPublicKeyHex: toHex(publicKeyFor(signingKey)),
   /** Enables one-click demo logins and the "reset demo data" button. */
   demoMode: process.env.DEMO_MODE !== "false",

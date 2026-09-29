@@ -1,6 +1,6 @@
 /** Admin write actions. Each one leaves an entry in the audit log. */
 import { parseCsv } from "./csv";
-import type { Db } from "./db";
+import type { Db } from "./dbcore";
 import { defaultRollCallWindow, getOrCreateActiveRollCall, getRollCall, insertRollCall, type RollCall } from "./rollcall";
 import type { SessionUser } from "./session";
 import { campusHour, campusTime } from "./time";

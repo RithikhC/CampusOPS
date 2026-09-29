@@ -59,6 +59,7 @@ create table if not exists scans (
 create unique index if not exists scans_one_presence
   on scans (roll_call_id, student_id) where result in ('valid', 'late', 'manual');
 create index if not exists scans_by_roll_call on scans (roll_call_id, scanned_at desc);
+create index if not exists scans_by_student on scans (student_id, roll_call_id);
 
 create table if not exists audit_log (
   id      integer generated always as identity primary key,

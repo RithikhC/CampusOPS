@@ -3,9 +3,9 @@
  * in progress (with a few flagged entries to follow up), and six previous nights for reports.
  * Deterministic, so every reset produces the same people.
  */
-import type { Db } from "./db";
+import type { Db } from "./dbcore";
 import { defaultRollCallWindow, DEFAULT_CURFEW, insertRollCall } from "./rollcall";
-import { campusTime, formatClock, formatDate } from "./time";
+import { campusHour, campusTime, formatClock, formatDate } from "./time";
 import type { ScanResult } from "./verify";
 
 /** Students offered on the demo login screen. They start tonight "not yet checked in". */
@@ -110,11 +110,12 @@ function buildNight(
   rollCallId: number,
   students: SeedStudent[],
   random: () => number,
-  opts: { fromMs: number; toMs: number; curfewMs: number; attendance: number; flags: boolean; prefix: string },
+  opts: { fromMs: number; toMs: number; curfewMs: number; attendance: number; flags: boolean; prefix: string; tonight?: boolean },
 ): SeedScan[] {
   const scans: SeedScan[] = [];
   const presentAt = new Map<string, { at: number; gate: string }>();
-  const eligible = students.filter((s) => !DEMO_STUDENT_IDS.includes(s.id));
+  // The demo students start tonight not yet checked in, so they can be scanned live.
+  const eligible = opts.tonight ? students.filter((s) => !DEMO_STUDENT_IDS.includes(s.id)) : students;
   const span = Math.max(opts.toMs - opts.fromMs, 60_000);
   const onTimeEnd = Math.max(Math.min(opts.curfewMs, opts.toMs), opts.fromMs + 60_000);
   const lateEnd = Math.min(opts.toMs, opts.curfewMs + 40 * 60_000);
@@ -236,20 +237,18 @@ function buildNight(
   return scans;
 }
 
-async function insertMany(db: Db, table: string, columns: string[], rows: unknown[][]) {
-  const chunk = 200;
-  for (let i = 0; i < rows.length; i += chunk) {
-    const slice = rows.slice(i, i + chunk);
-    const params: unknown[] = [];
-    const values = slice.map((row) => {
-      const placeholders = row.map((value) => {
-        params.push(value);
-        return `$${params.length}`;
-      });
-      return `(${placeholders.join(", ")})`;
-    });
-    await db.query(`insert into ${table} (${columns.join(", ")}) values ${values.join(", ")}`, params);
-  }
+/** Inserts all rows in one statement, passed as a single JSON value (much faster than thousands of parameters). */
+async function insertMany(db: Db, table: string, columns: [name: string, type: string][], rows: unknown[][]) {
+  if (rows.length === 0) return;
+  const names = columns.map(([name]) => name);
+  const records = rows.map((row) =>
+    Object.fromEntries(row.map((value, i) => [names[i], value instanceof Date ? value.toISOString() : value])),
+  );
+  await db.query(
+    `insert into ${table} (${names.join(", ")})
+     select ${names.join(", ")} from json_to_recordset($1::json) as r(${columns.map(([name, type]) => `${name} ${type}`).join(", ")})`,
+    [JSON.stringify(records)],
+  );
 }
 
 async function insertScans(db: Db, scans: SeedScan[]) {
@@ -257,8 +256,10 @@ async function insertScans(db: Db, scans: SeedScan[]) {
     db,
     "scans",
     [
-      "client_id", "roll_call_id", "student_id", "claimed_id", "checkpoint_id", "scanned_by", "method",
-      "result", "reason", "scanned_at", "received_at", "offline", "resolved_at", "resolved_by", "resolution_note",
+      ["client_id", "text"], ["roll_call_id", "int"], ["student_id", "text"], ["claimed_id", "text"], ["checkpoint_id", "text"],
+      ["scanned_by", "text"], ["method", "text"], ["result", "text"], ["reason", "text"], ["scanned_at", "timestamptz"],
+      ["received_at", "timestamptz"], ["offline", "boolean"], ["resolved_at", "timestamptz"], ["resolved_by", "text"],
+      ["resolution_note", "text"],
     ],
     scans.map((s) => [
       s.clientId, s.rollCallId, s.studentId, s.claimedId, s.checkpointId, s.scannedBy, s.method,
@@ -276,22 +277,25 @@ export async function seedDemoData(db: Db, nowMs = Date.now()): Promise<void> {
   const random = prng(2026);
   const students = buildStudents(random);
 
-  await insertMany(db, "staff", ["id", "name", "email", "role", "title"], DEMO_STAFF.map((s) => [s.id, s.name, s.email, s.role, s.title]));
-  await insertMany(db, "checkpoints", ["id", "name", "hostel"], CHECKPOINTS.map((c) => [c.id, c.name, c.hostel]));
-  await insertMany(db, "students", ["id", "name", "email", "hostel", "room"], students.map((s) => [s.id, s.name, s.email, s.hostel, s.room]));
+  const text = (...names: string[]) => names.map((name): [string, string] => [name, "text"]);
+  await insertMany(db, "staff", text("id", "name", "email", "role", "title"), DEMO_STAFF.map((s) => [s.id, s.name, s.email, s.role, s.title]));
+  await insertMany(db, "checkpoints", text("id", "name", "hostel"), CHECKPOINTS.map((c) => [c.id, c.name, c.hostel]));
+  await insertMany(db, "students", text("id", "name", "email", "hostel", "room"), students.map((s) => [s.id, s.name, s.email, s.hostel, s.room]));
+  const scans: SeedScan[] = [];
 
-  // Six previous nights, for trends and date-range reports.
+  // Six previous nights, for trends and date-range reports. Count back from tonight's evening:
+  // between midnight and 06:00, "tonight" started on the previous calendar day.
+  const evening = campusHour(nowMs) < 6 ? campusTime(nowMs, 12, 0, -1) : nowMs;
   for (let daysAgo = 6; daysAgo >= 1; daysAgo--) {
-    const startsAt = campusTime(nowMs, 18, 0, -daysAgo);
-    const curfewAt = campusTime(nowMs, DEFAULT_CURFEW.hours, DEFAULT_CURFEW.minutes, -daysAgo);
+    const startsAt = campusTime(evening, 18, 0, -daysAgo);
+    const curfewAt = campusTime(evening, DEFAULT_CURFEW.hours, DEFAULT_CURFEW.minutes, -daysAgo);
     const rollCall = await insertRollCall(
       db,
-      { name: `Night roll call · ${formatDate(startsAt)}`, startsAt, endsAt: campusTime(nowMs, 6, 0, 1 - daysAgo), curfewAt },
+      { name: `Night roll call · ${formatDate(startsAt)}`, startsAt, endsAt: campusTime(evening, 6, 0, 1 - daysAgo), curfewAt },
       "system",
     );
-    await insertScans(
-      db,
-      buildNight(rollCall.id, students, random, {
+    scans.push(
+      ...buildNight(rollCall.id, students, random, {
         fromMs: curfewAt - 3.5 * 60 * 60_000,
         toMs: curfewAt + 50 * 60_000,
         curfewMs: curfewAt,
@@ -305,17 +309,18 @@ export async function seedDemoData(db: Db, nowMs = Date.now()): Promise<void> {
   // Tonight, in progress.
   const window = defaultRollCallWindow(nowMs);
   const tonight = await insertRollCall(db, window, "system");
-  await insertScans(
-    db,
-    buildNight(tonight.id, students, random, {
+  scans.push(
+    ...buildNight(tonight.id, students, random, {
       fromMs: Math.max(window.startsAt, nowMs - 100 * 60_000),
       toMs: nowMs - 60_000,
       curfewMs: window.curfewAt,
       attendance: 0.68,
       flags: true,
       prefix: "seed-tonight",
+      tonight: true,
     }),
   );
+  await insertScans(db, scans);
 
   await db.query(`insert into audit_log (actor, action, detail) values ('system', 'seed', 'Demo data loaded')`);
 }

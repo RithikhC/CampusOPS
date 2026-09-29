@@ -1,6 +1,6 @@
 /** Records scans sent by scanners. The server re-checks every scan; its verdict is final. */
 import { config } from "./config";
-import { isUniqueViolation, type Db } from "./db";
+import { isUniqueViolation, type Db } from "./dbcore";
 import { fromHex, parsePass } from "./pass";
 import { getOrCreateActiveRollCall } from "./rollcall";
 import type { SessionUser } from "./session";

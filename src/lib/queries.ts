@@ -1,6 +1,6 @@
 /** Read models for the three apps. Each returns plain JSON-safe objects. */
 import { config } from "./config";
-import type { Db } from "./db";
+import type { Db } from "./dbcore";
 import { PERIOD_SECONDS, periodAt, signPass } from "./pass";
 import { getOrCreateActiveRollCall, getRollCall, listRollCalls, type RollCall } from "./rollcall";
 import { FLAG_RESULTS, PRESENT_RESULTS, type RosterEntry, type ScanMethod, type ScanResult } from "./verify";
@@ -9,6 +9,19 @@ const PRESENT_SQL = `('${PRESENT_RESULTS.join("','")}')`;
 const FLAG_SQL = `('${FLAG_RESULTS.join("','")}')`;
 /** How far ahead a student's phone is pre-loaded with codes, so the pass works without signal. */
 const PRELOAD_MINUTES = 20;
+
+/** Signed codes are reused across refreshes; signing 80 codes on every poll is wasted work. */
+const signedCodes = new Map<string, string>();
+function cachedPass(studentId: string, period: number): string {
+  const key = `${studentId}.${period}`;
+  let code = signedCodes.get(key);
+  if (!code) {
+    code = signPass(studentId, period, config.qrSigningKey);
+    if (signedCodes.size > 20_000) signedCodes.clear();
+    signedCodes.set(key, code);
+  }
+  return code;
+}
 
 const iso = (value: Date | string | null) => (value ? new Date(value).toISOString() : null);
 
@@ -54,7 +67,7 @@ export async function studentPass(db: Db, studentId: string): Promise<StudentPas
   const count = (PRELOAD_MINUTES * 60) / PERIOD_SECONDS;
   const codes = Array.from({ length: count }, (_, i) => ({
     period: first + i,
-    code: signPass(studentId, first + i, config.qrSigningKey),
+    code: cachedPass(studentId, first + i),
   }));
 
   return {

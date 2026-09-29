@@ -9,11 +9,14 @@
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
-    "keys": "node scripts/generate-keys.mjs"
+    "keys": "node scripts/generate-keys.mjs",
+    "build:pages": "node scripts/build-pages.mjs",
+    "preview:pages": "node scripts/serve-demo.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.8",
     "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
     "jose": "^6.2.12",
     "jsqr": "^1.4.0",
     "lucide-react": "^1.48.0",

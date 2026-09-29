@@ -1,5 +1,5 @@
 /** Roll calls: one per night, created automatically so guards never have to "set anything up". */
-import type { Db } from "./db";
+import type { Db } from "./dbcore";
 import { campusHour, campusTime, formatDate } from "./time";
 
 export const DEFAULT_CURFEW = { hours: 22, minutes: 30 };
