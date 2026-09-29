@@ -311,10 +311,12 @@ export async function seedDemoData(db: Db, nowMs = Date.now()): Promise<void> {
   const tonight = await insertRollCall(db, window, "system");
   scans.push(
     ...buildNight(tonight.id, students, random, {
-      fromMs: Math.max(window.startsAt, nowMs - 100 * 60_000),
+      // Arrivals spread over the evening up to curfew (or up to now, if curfew hasn't passed yet).
+      fromMs: Math.max(window.startsAt, Math.min(nowMs, window.curfewAt) - 3.5 * 60 * 60_000),
       toMs: nowMs - 60_000,
       curfewMs: window.curfewAt,
-      attendance: 0.68,
+      // Before curfew the roll call is still filling up; after it, most students are back.
+      attendance: nowMs > window.curfewAt ? 0.9 : 0.68,
       flags: true,
       prefix: "seed-tonight",
       tonight: true,

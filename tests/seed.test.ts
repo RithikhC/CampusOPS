@@ -42,6 +42,16 @@ describe("demo data", () => {
         [tonight!.id, DEMO_STUDENT_IDS],
       );
       expect(count).toBe(0);
+
+      // Late arrivals should be the exception, whatever time it is.
+      const [{ present, late }] = await db.query<{ present: number; late: number }>(
+        `select count(*) filter (where result in ('valid', 'late', 'manual'))::int as present,
+                count(*) filter (where result = 'late')::int as late
+           from scans where roll_call_id = $1`,
+        [tonight!.id],
+      );
+      expect(present).toBeGreaterThan(50);
+      expect(late / present).toBeLessThan(0.15);
     }, 60_000);
   }
 
