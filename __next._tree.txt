@@ -1,0 +1,2 @@
+:HL["/CampusOPS/_next/static/chunks/3t2nt1-pu8dnp.css","style"]
+0:{"tree":{"name":"","param":null,"prefetchHints":4176,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":4256,"slots":null}}},"staleTime":300,"buildId":"Edz3X3wPNlqqi_ryA3J7l"}
