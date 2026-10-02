@@ -75,7 +75,7 @@ async function findStudent(db: Db, id: string): Promise<RosterEntry | undefined>
 
 async function findPresence(db: Db, rollCallId: number, studentId: string): Promise<Presence | undefined> {
   const [row] = await db.query<{ scanned_at: Date; checkpoint: string | null }>(
-    `select s.scanned_at, c.name as checkpoint
+    `select s.scanned_at, coalesce(c.name, case s.method when 'self' then 'room check-in' when 'round' then 'warden''s rounds' end) as checkpoint
        from scans s left join checkpoints c on c.id = s.checkpoint_id
       where s.roll_call_id = $1 and s.student_id = $2 and s.result in ${PRESENT_SQL}
       limit 1`,

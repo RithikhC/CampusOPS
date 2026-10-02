@@ -1,7 +1,9 @@
 /** Admin write actions. Each one leaves an entry in the audit log. */
+import { config } from "./config";
 import { parseCsv } from "./csv";
 import type { Db } from "./dbcore";
 import { defaultRollCallWindow, getOrCreateActiveRollCall, getRollCall, insertRollCall, type RollCall } from "./rollcall";
+import { signRoomTag } from "./roomtag";
 import type { SessionUser } from "./session";
 import { campusHour, campusTime } from "./time";
 import { FLAG_RESULTS } from "./verify";
@@ -100,4 +102,18 @@ export async function importRoster(db: Db, actor: SessionUser, csv: string): Pro
 
   await audit(db, actor, "import_roster", `${result.added} added, ${result.updated} updated, ${result.errors.length} errors`);
   return result;
+}
+
+export interface PrintableRoomTag {
+  hostel: string;
+  room: string;
+  code: string;
+}
+
+/** One signed tag per room that has students in it. */
+export async function listRoomTags(db: Db): Promise<PrintableRoomTag[]> {
+  const rooms = await db.query<{ hostel: string; room: string }>(
+    `select distinct hostel, room from students where active order by hostel, room`,
+  );
+  return rooms.map((r) => ({ ...r, code: signRoomTag(r.hostel, r.room, config.qrSigningKey) }));
 }

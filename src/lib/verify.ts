@@ -12,13 +12,21 @@ import {
 } from "./pass";
 import { formatClock } from "./time";
 
-export type ScanResult = "valid" | "late" | "manual" | "duplicate" | "expired" | "invalid" | "unknown";
-export type ScanMethod = "qr" | "manual";
+export type ScanResult = "valid" | "late" | "manual" | "duplicate" | "expired" | "invalid" | "unknown" | "absent";
+/** How a record was made: gate scan, guard's manual entry, student's room check-in, or warden's rounds. */
+export type ScanMethod = "qr" | "manual" | "self" | "round";
+
+export const METHOD_LABELS: Record<ScanMethod, string> = {
+  qr: "Gate scan",
+  manual: "Manual entry",
+  self: "Room check-in",
+  round: "Warden's rounds",
+};
 
 /** Results that count the student as present for the roll call. */
 export const PRESENT_RESULTS: readonly ScanResult[] = ["valid", "late", "manual"];
 /** Results that need someone to follow up. */
-export const FLAG_RESULTS: readonly ScanResult[] = ["late", "manual", "duplicate", "expired", "invalid", "unknown"];
+export const FLAG_RESULTS: readonly ScanResult[] = ["late", "manual", "duplicate", "expired", "invalid", "unknown", "absent"];
 
 export type Tone = "ok" | "warn" | "bad";
 
@@ -28,8 +36,9 @@ export const RESULT_META: Record<ScanResult, { label: string; tone: Tone }> = {
   manual: { label: "Manual", tone: "warn" },
   duplicate: { label: "Duplicate", tone: "bad" },
   expired: { label: "Expired code", tone: "bad" },
-  invalid: { label: "Invalid code", tone: "bad" },
+  invalid: { label: "Rejected", tone: "bad" },
   unknown: { label: "Not on roster", tone: "bad" },
+  absent: { label: "Not in room", tone: "bad" },
 };
 
 export interface RosterEntry {

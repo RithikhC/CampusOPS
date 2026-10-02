@@ -3,6 +3,8 @@ import { config } from "./config";
 import type { Db } from "./dbcore";
 import { PERIOD_SECONDS, periodAt, signPass } from "./pass";
 import { getOrCreateActiveRollCall, getRollCall, listRollCalls, type RollCall } from "./rollcall";
+import { checkInOpensAt } from "./roomcheck";
+import { buildRounds, type Rounds } from "./rounds";
 import { FLAG_RESULTS, PRESENT_RESULTS, type RosterEntry, type ScanMethod, type ScanResult } from "./verify";
 
 const PRESENT_SQL = `('${PRESENT_RESULTS.join("','")}')`;
@@ -25,12 +27,17 @@ function cachedPass(studentId: string, period: number): string {
 
 const iso = (value: Date | string | null) => (value ? new Date(value).toISOString() : null);
 
+/** Where a check-in happened, for records without a gate. */
+export const PLACE_SQL = `coalesce(c.name, case s.method when 'self' then 'Room check-in' when 'round' then 'Warden''s rounds' end)`;
+
 // ---------------------------------------------------------------- student
 
 export interface StudentPassData {
   student: RosterEntry & { email: string };
   rollCall: RollCall;
-  status: { result: ScanResult; at: string; checkpoint: string | null } | null;
+  status: { result: ScanResult; at: string; checkpoint: string | null; method: ScanMethod } | null;
+  /** When room check-in opens tonight, and whether it is open now. */
+  roomCheckIn: { opensAt: string; open: boolean };
   codes: { period: number; code: string }[];
   periodSeconds: number;
   serverNow: number;
@@ -46,8 +53,8 @@ export async function studentPass(db: Db, studentId: string): Promise<StudentPas
   if (!student) return null;
 
   const rollCall = await getOrCreateActiveRollCall(db, now);
-  const [status] = await db.query<{ result: ScanResult; scanned_at: Date; checkpoint: string | null }>(
-    `select s.result, s.scanned_at, c.name as checkpoint
+  const [status] = await db.query<{ result: ScanResult; scanned_at: Date; checkpoint: string | null; method: ScanMethod }>(
+    `select s.result, s.scanned_at, c.name as checkpoint, s.method
        from scans s left join checkpoints c on c.id = s.checkpoint_id
       where s.roll_call_id = $1 and s.student_id = $2 and s.result in ${PRESENT_SQL}
       limit 1`,
@@ -73,7 +80,8 @@ export async function studentPass(db: Db, studentId: string): Promise<StudentPas
   return {
     student,
     rollCall,
-    status: status ? { result: status.result, at: iso(status.scanned_at)!, checkpoint: status.checkpoint } : null,
+    status: status ? { result: status.result, at: iso(status.scanned_at)!, checkpoint: status.checkpoint, method: status.method } : null,
+    roomCheckIn: { opensAt: new Date(checkInOpensAt(rollCall)).toISOString(), open: now >= checkInOpensAt(rollCall) },
     codes,
     periodSeconds: PERIOD_SECONDS,
     serverNow: now,
@@ -100,7 +108,7 @@ export async function guardBootstrap(db: Db): Promise<GuardBootstrap> {
     db.query<{ id: string; name: string }>(`select id, name from checkpoints order by hostel nulls last, name`),
     db.query<RosterEntry>(`select id, name, hostel, room from students where active order by name`),
     db.query<{ student_id: string; scanned_at: Date; checkpoint: string | null }>(
-      `select s.student_id, s.scanned_at, c.name as checkpoint
+      `select s.student_id, s.scanned_at, ${PLACE_SQL} as checkpoint
          from scans s left join checkpoints c on c.id = s.checkpoint_id
         where s.roll_call_id = $1 and s.result in ${PRESENT_SQL}`,
       [rollCall.id],
@@ -147,7 +155,7 @@ export interface ScanRecord {
 
 const RECORD_SELECT = `
   select s.id, s.scanned_at, s.received_at, s.result, s.reason, s.method, s.offline, s.student_id, s.claimed_id,
-         st.name as student_name, st.hostel, st.room, c.name as checkpoint, sf.name as scanned_by,
+         st.name as student_name, st.hostel, st.room, ${PLACE_SQL} as checkpoint, sf.name as scanned_by,
          rc.name as roll_call, s.resolved_at, rs.name as resolved_by, s.resolution_note
     from scans s
     join roll_calls rc on rc.id = s.roll_call_id
@@ -197,6 +205,9 @@ export interface AdminOverview {
   rollCalls: RollCall[];
   isLive: boolean;
   stats: { expected: number; present: number; missing: number; late: number; manual: number; flagsOpen: number; rejected: number };
+  /** How tonight's present students were confirmed. */
+  verifiedBy: Record<ScanMethod, number>;
+  rounds: Rounds;
   byHostel: { hostel: string; expected: number; present: number }[];
   arrivals: { at: string; count: number }[];
   trend: { id: number; name: string; startsAt: string; present: number; late: number }[];
@@ -210,7 +221,7 @@ export async function adminOverview(db: Db, rollCallId?: number): Promise<AdminO
   const rollCall = rollCallId ? await getRollCall(db, rollCallId) : await getOrCreateActiveRollCall(db, now);
   if (!rollCall) return null;
 
-  const [rollCalls, byHostel, counts, presentTimes, trend, feed, flags, missing] = await Promise.all([
+  const [rollCalls, byHostel, counts, presentTimes, trend, feed, flags, missing, methods, rounds] = await Promise.all([
     listRollCalls(db),
     db.query<{ hostel: string; expected: number; present: number }>(
       `select st.hostel, count(*)::int as expected, count(p.student_id)::int as present
@@ -258,6 +269,11 @@ export async function adminOverview(db: Db, rollCallId?: number): Promise<AdminO
         order by (a.result is null), st.hostel, st.name`,
       [rollCall.id],
     ),
+    db.query<{ method: ScanMethod; count: number }>(
+      `select method, count(*)::int as count from scans where roll_call_id = $1 and result in ${PRESENT_SQL} group by method`,
+      [rollCall.id],
+    ),
+    buildRounds(db, rollCall.id, now),
   ]);
 
   const count = (result: ScanResult) => counts.find((c) => c.result === result);
@@ -277,6 +293,13 @@ export async function adminOverview(db: Db, rollCallId?: number): Promise<AdminO
       flagsOpen: counts.filter((c) => FLAG_RESULTS.includes(c.result)).reduce((sum, c) => sum + c.open, 0),
       rejected: counts.filter((c) => !PRESENT_RESULTS.includes(c.result)).reduce((sum, c) => sum + c.total, 0),
     },
+    verifiedBy: {
+      self: methods.find((m) => m.method === "self")?.count ?? 0,
+      qr: methods.find((m) => m.method === "qr")?.count ?? 0,
+      round: methods.find((m) => m.method === "round")?.count ?? 0,
+      manual: methods.find((m) => m.method === "manual")?.count ?? 0,
+    },
+    rounds: rounds!,
     byHostel,
     arrivals: bucketArrivals(presentTimes.map((p) => new Date(p.scanned_at).getTime())),
     trend: trend.reverse().map((t) => ({ id: t.id, name: t.name, startsAt: iso(t.starts_at)!, present: t.present, late: t.late })),

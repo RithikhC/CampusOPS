@@ -44,15 +44,41 @@ create table if not exists scans (
   claimed_id       text,                        -- ID read from the code, kept even if not on the roster
   checkpoint_id    text references checkpoints(id),
   scanned_by       text not null,
-  method           text not null check (method in ('qr', 'manual')),
-  result           text not null check (result in ('valid', 'late', 'manual', 'duplicate', 'expired', 'invalid', 'unknown')),
+  method           text not null check (method in ('qr', 'manual', 'self', 'round')),
+  result           text not null check (result in ('valid', 'late', 'manual', 'duplicate', 'expired', 'invalid', 'unknown', 'absent')),
   reason           text not null,
   scanned_at       timestamptz not null,        -- when the guard scanned (device time)
   received_at      timestamptz not null default now(),
   offline          boolean not null default false,
   resolved_at      timestamptz,
   resolved_by      text,
-  resolution_note  text
+  resolution_note  text,
+  device_id        text                         -- phone used for a room check-in
+);
+
+-- Upgrades for databases created before room check-ins and rounds existed.
+alter table scans add column if not exists device_id text;
+alter table scans drop constraint if exists scans_method_check;
+alter table scans add constraint scans_method_check check (method in ('qr', 'manual', 'self', 'round'));
+alter table scans drop constraint if exists scans_result_check;
+alter table scans add constraint scans_result_check
+  check (result in ('valid', 'late', 'manual', 'duplicate', 'expired', 'invalid', 'unknown', 'absent'));
+
+-- The one phone each student may check in from. Registered on first use; the hostel office can reset it.
+create table if not exists student_devices (
+  student_id     text primary key references students(id) on delete cascade,
+  device_id      text not null,
+  registered_at  timestamptz not null default now()
+);
+
+-- What the warden found at the door during rounds: one row per student per night.
+create table if not exists room_visits (
+  roll_call_id  integer not null references roll_calls(id) on delete cascade,
+  student_id    text not null references students(id) on delete cascade,
+  outcome       text not null check (outcome in ('present', 'absent')),
+  visited_by    text not null,
+  visited_at    timestamptz not null,
+  primary key (roll_call_id, student_id)
 );
 
 -- A student can be marked present at most once per roll call, even if two gates scan at the same instant.

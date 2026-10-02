@@ -55,9 +55,10 @@ interface SeedScan {
   rollCallId: number;
   studentId: string | null;
   claimedId: string | null;
-  checkpointId: string;
+  checkpointId: string | null;
   scannedBy: string;
-  method: "qr" | "manual";
+  method: "qr" | "manual" | "self";
+  deviceId?: string;
   result: ScanResult;
   reason: string;
   scannedAt: number;
@@ -113,7 +114,7 @@ function buildNight(
   opts: { fromMs: number; toMs: number; curfewMs: number; attendance: number; flags: boolean; prefix: string; tonight?: boolean },
 ): SeedScan[] {
   const scans: SeedScan[] = [];
-  const presentAt = new Map<string, { at: number; gate: string }>();
+  const presentAt = new Map<string, { at: number; gate: string; self: boolean }>();
   // The demo students start tonight not yet checked in, so they can be scanned live.
   const eligible = opts.tonight ? students.filter((s) => !DEMO_STUDENT_IDS.includes(s.id)) : students;
   const span = Math.max(opts.toMs - opts.fromMs, 60_000);
@@ -130,28 +131,32 @@ function buildNight(
       : Math.round(opts.fromMs + (onTimeEnd - opts.fromMs) * Math.sqrt(random()));
     const gate = gateFor(student, random);
     const manual = manualLeft > 0 && random() < 0.04;
+    // Most students check in from their room; the rest are scanned by a guard at a gate.
+    const self = !manual && random() < 0.62;
+    const minutesLate = Math.ceil((scannedAt - opts.curfewMs) / 60_000);
     let result: ScanResult = "valid";
-    let reason = "Checked in";
+    let reason = self ? `Checked in from room ${student.room}` : "Checked in";
     if (manual) {
       result = "manual";
       reason = `Manual entry: ${MANUAL_REASONS[--manualLeft % MANUAL_REASONS.length]}`;
     } else if (scannedAt > opts.curfewMs) {
       result = "late";
-      reason = `${Math.ceil((scannedAt - opts.curfewMs) / 60_000)} min after curfew`;
+      reason = self ? `Room check-in ${minutesLate} min after curfew` : `${minutesLate} min after curfew`;
     }
-    presentAt.set(student.id, { at: scannedAt, gate: gate.name });
+    presentAt.set(student.id, { at: scannedAt, gate: self ? "room check-in" : gate.name, self });
     scans.push({
       clientId: `${opts.prefix}-${scans.length}`,
       rollCallId,
       studentId: student.id,
       claimedId: student.id,
-      checkpointId: gate.id,
-      scannedBy: gate.guard,
-      method: manual ? "manual" : "qr",
+      checkpointId: self ? null : gate.id,
+      scannedBy: self ? "student" : gate.guard,
+      method: manual ? "manual" : self ? "self" : "qr",
       result,
       reason,
       scannedAt,
-      offline: gate.id === "gate-c" && random() < 0.3,
+      offline: !self && gate.id === "gate-c" && random() < 0.3,
+      deviceId: self ? phoneOf(student.id) : undefined,
     });
   }
 
@@ -231,6 +236,35 @@ function buildNight(
     },
   );
 
+  // Room check-ins that were refused. These students end up on the warden's rounds.
+  const selfAttempt = (student: SeedStudent, reason: string, scannedAt: number, deviceId = phoneOf(student.id)): SeedScan => ({
+    clientId: `${opts.prefix}-self-${scans.length}`,
+    rollCallId,
+    studentId: student.id,
+    claimedId: student.id,
+    checkpointId: null,
+    scannedBy: "student",
+    method: "self",
+    result: "invalid",
+    reason,
+    scannedAt,
+    offline: false,
+    deviceId,
+  });
+  if (opts.tonight) {
+    for (let i = 0; i < 2 && absent.length; i++) {
+      scans.push(selfAttempt(pick(absent), "Room check-in tried from outside the hostel network", Math.round(opts.fromMs + span * (0.6 + random() * 0.35))));
+    }
+    if (absent.length) {
+      scans.push(selfAttempt(pick(absent), "Room check-in tried from a phone that isn't registered to this student", Math.round(opts.fromMs + span * 0.85), "another-phone"));
+    }
+    const wrongRoom = present.find((s) => presentAt.get(s.id)!.self);
+    if (wrongRoom) {
+      const neighbour = `${wrongRoom.room.slice(0, -1)}${(Number(wrongRoom.room.slice(-1)) + 1) % 10}`;
+      scans.push(selfAttempt(wrongRoom, `Scanned the tag for room ${neighbour}, but is assigned to room ${wrongRoom.room}`, presentAt.get(wrongRoom.id)!.at - 90_000));
+    }
+  }
+
   const firstManual = scans.find((s) => s.result === "manual");
   if (firstManual) firstManual.resolved = { note: "Identity confirmed against ID card photo.", by: "admin-1" };
 
@@ -259,7 +293,7 @@ async function insertScans(db: Db, scans: SeedScan[]) {
       ["client_id", "text"], ["roll_call_id", "int"], ["student_id", "text"], ["claimed_id", "text"], ["checkpoint_id", "text"],
       ["scanned_by", "text"], ["method", "text"], ["result", "text"], ["reason", "text"], ["scanned_at", "timestamptz"],
       ["received_at", "timestamptz"], ["offline", "boolean"], ["resolved_at", "timestamptz"], ["resolved_by", "text"],
-      ["resolution_note", "text"],
+      ["resolution_note", "text"], ["device_id", "text"],
     ],
     scans.map((s) => [
       s.clientId, s.rollCallId, s.studentId, s.claimedId, s.checkpointId, s.scannedBy, s.method,
@@ -269,11 +303,25 @@ async function insertScans(db: Db, scans: SeedScan[]) {
       s.resolved ? new Date(s.scannedAt + 25 * 60_000) : null,
       s.resolved?.by ?? null,
       s.resolved?.note ?? null,
+      s.deviceId ?? null,
     ]),
   );
 }
 
-export async function seedDemoData(db: Db, nowMs = Date.now()): Promise<void> {
+export interface SeedOptions {
+  /**
+   * Run tonight's roll call "right now" with curfew this many minutes away, whatever the time of
+   * day. Used by the browser demo so visitors always land in the middle of an evening.
+   */
+  curfewInMinutes?: number;
+  /** Also register the demo students' phones (the browser demo uses fixed phone IDs for them). */
+  registerDemoPhones?: boolean;
+}
+
+/** The phone each seeded student is registered with. */
+export const phoneOf = (studentId: string) => `phone-${studentId}`;
+
+export async function seedDemoData(db: Db, nowMs = Date.now(), options: SeedOptions = {}): Promise<void> {
   const random = prng(2026);
   const students = buildStudents(random);
 
@@ -281,6 +329,16 @@ export async function seedDemoData(db: Db, nowMs = Date.now()): Promise<void> {
   await insertMany(db, "staff", text("id", "name", "email", "role", "title"), DEMO_STAFF.map((s) => [s.id, s.name, s.email, s.role, s.title]));
   await insertMany(db, "checkpoints", text("id", "name", "hostel"), CHECKPOINTS.map((c) => [c.id, c.name, c.hostel]));
   await insertMany(db, "students", text("id", "name", "email", "hostel", "room"), students.map((s) => [s.id, s.name, s.email, s.hostel, s.room]));
+  // Everyone except the demo students already has a registered phone. The demo students register
+  // theirs with their first room check-in, which puts them on tonight's spot-check list.
+  await insertMany(
+    db,
+    "student_devices",
+    [["student_id", "text"], ["device_id", "text"], ["registered_at", "timestamptz"]],
+    students
+      .filter((s) => options.registerDemoPhones || !DEMO_STUDENT_IDS.includes(s.id))
+      .map((s) => [s.id, phoneOf(s.id), new Date(nowMs - 30 * 24 * 60 * 60_000)]),
+  );
   const scans: SeedScan[] = [];
 
   // Six previous nights, for trends and date-range reports. Count back from tonight's evening:
@@ -307,7 +365,15 @@ export async function seedDemoData(db: Db, nowMs = Date.now()): Promise<void> {
   }
 
   // Tonight, in progress.
-  const window = defaultRollCallWindow(nowMs);
+  const live = options.curfewInMinutes !== undefined;
+  const window = live
+    ? {
+        name: `Night roll call · ${formatDate(evening)}`,
+        startsAt: nowMs - 3 * 60 * 60_000,
+        endsAt: nowMs + 9 * 60 * 60_000,
+        curfewAt: Math.ceil((nowMs + options.curfewInMinutes! * 60_000) / 300_000) * 300_000,
+      }
+    : defaultRollCallWindow(nowMs);
   const tonight = await insertRollCall(db, window, "system");
   scans.push(
     ...buildNight(tonight.id, students, random, {
@@ -316,7 +382,7 @@ export async function seedDemoData(db: Db, nowMs = Date.now()): Promise<void> {
       toMs: nowMs - 60_000,
       curfewMs: window.curfewAt,
       // Before curfew the roll call is still filling up; after it, most students are back.
-      attendance: nowMs > window.curfewAt ? 0.9 : 0.68,
+      attendance: nowMs > window.curfewAt ? 0.9 : live ? 0.86 : 0.68,
       flags: true,
       prefix: "seed-tonight",
       tonight: true,
@@ -327,7 +393,7 @@ export async function seedDemoData(db: Db, nowMs = Date.now()): Promise<void> {
   await db.query(`insert into audit_log (actor, action, detail) values ('system', 'seed', 'Demo data loaded')`);
 }
 
-export async function resetDemoData(db: Db): Promise<void> {
+export async function resetDemoData(db: Db, options: SeedOptions = {}): Promise<void> {
   await db.exec(`truncate scans, roll_calls, students, staff, checkpoints, audit_log restart identity cascade`);
-  await seedDemoData(db);
+  await seedDemoData(db, Date.now(), options);
 }
