@@ -424,6 +424,13 @@ export function RoundsTab({ rounds }: { rounds: Rounds }) {
 /** Printable sheet of the signed QR tags that go inside each room. */
 function RoomTags({ onClose }: { onClose: () => void }) {
   const [tags, setTags] = useState<PrintableRoomTag[] | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+
+  // For trying a check-in without a camera: the code can be pasted into the student's screen.
+  async function copyCode(tag: PrintableRoomTag) {
+    await navigator.clipboard.writeText(tag.code);
+    setCopied(`${tag.hostel}-${tag.room}`);
+  }
 
   useEffect(() => {
     const first = window.setTimeout(async () => {
@@ -458,6 +465,9 @@ function RoomTags({ onClose }: { onClose: () => void }) {
               <QrCode value={tag.code} label={`Room tag ${tag.room}`} />
               <div className="text-sm font-semibold">{tag.room}</div>
               <div className="text-[10px] text-neutral-600">{tag.hostel} · NightPass room tag</div>
+              <button onClick={() => copyCode(tag)} className="mt-1 text-[11px] text-blue-700 underline print:hidden">
+                {copied === `${tag.hostel}-${tag.room}` ? "Copied" : "Copy code"}
+              </button>
             </div>
           ))}
         </div>

@@ -161,7 +161,7 @@ async function route(db: Db, user: SessionUser, method: string, rawUrl: string, 
     } else {
       const records = await searchRecords(db, { ...filtersFromSearchParams(url.searchParams), limit: 10_000 });
       csv = toCsv(
-        ["Date", "Time", "Roll call", "Student ID", "Name", "Hostel", "Room", "Checkpoint", "Method", "Result", "Detail",
+        ["Date", "Time", "Roll call", "Student ID", "Name", "Hostel", "Room", "Where", "Method", "Result", "Detail",
           "Scanned by", "Recorded offline", "Resolved by", "Resolution note"],
         records.map((r) => [
           formatDate(r.scannedAt), formatClock(r.scannedAt, true), r.rollCall, r.studentId ?? r.claimedId ?? "",

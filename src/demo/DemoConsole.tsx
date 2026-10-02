@@ -157,7 +157,7 @@ export default function DemoConsole() {
       if (find("student", "Try again")) await tap("student", "Try again");
       else if (!(await tap("student", "Check in from my room"))) return false;
       await new Promise((resolve) => window.setTimeout(resolve, 1300));
-      student.__nightpassCamera?.show(await (await backend).roomTag(who), 2000, "tag");
+      student.__nightpassCamera?.show(await (await backend).roomTag(who), 2800, "tag");
       return true;
     },
     [backend, find, frameWindow, studentId, tap],

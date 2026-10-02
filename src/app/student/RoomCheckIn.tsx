@@ -110,7 +110,7 @@ export function RoomCheckIn({ studentId, room, onClose }: { studentId: string; r
               <input
                 value={typed}
                 onChange={(e) => setTyped(e.target.value)}
-                placeholder="Or type the code under the tag"
+                placeholder="Or paste the tag code"
                 className="h-11 min-w-0 flex-1 rounded-xl bg-surface px-3 font-mono text-sm ring-1 ring-line outline-none focus:ring-brand"
                 aria-label="Tag code"
                 autoComplete="off"

@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
   } else {
     const records = await searchRecords(db, { ...filtersFromSearchParams(params), limit: 10_000 });
     csv = toCsv(
-      ["Date", "Time", "Roll call", "Student ID", "Name", "Hostel", "Room", "Checkpoint", "Method", "Result", "Detail",
+      ["Date", "Time", "Roll call", "Student ID", "Name", "Hostel", "Room", "Where", "Method", "Result", "Detail",
         "Scanned by", "Recorded offline", "Resolved by", "Resolution note"],
       records.map((r) => [
         formatDate(r.scannedAt), formatClock(r.scannedAt, true), r.rollCall, r.studentId ?? r.claimedId ?? "",

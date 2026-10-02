@@ -120,7 +120,7 @@ export async function buildRounds(db: Db, rollCallId?: number, nowMs = Date.now(
     if (row.rejected > 0) reasons.push("Had a rejected attempt tonight");
     if (row.device_at && new Date(row.device_at) >= startsAt) reasons.push("New phone registered tonight");
     if (row.missed >= MISSED_NIGHTS_THRESHOLD) reasons.push(`Missed ${row.missed} of the last 6 nights`);
-    if (reasons.length === 0 && pickedAtRandom(row.id, rollCall.id)) reasons.push("Random spot check");
+    if (reasons.length === 0 && pickedAtRandom(row.id, rollCall.id)) reasons.push("Picked at random");
     if (reasons.length > 0 || visit) {
       items.push({ student, kind: "spot", reasons: reasons.length ? reasons : ["Spot check"], checkedInAt, visit });
     }
