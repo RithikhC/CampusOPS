@@ -12,6 +12,7 @@ const TITLES: Record<Verdict["result"], string> = {
   expired: "Expired code",
   invalid: "Invalid code",
   unknown: "Not on roster",
+  absent: "Not in room",
 };
 
 const BACKGROUND = { ok: "bg-[#0f7a3a]", warn: "bg-[#a36200]", bad: "bg-[#b42323]" };

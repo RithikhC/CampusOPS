@@ -36,6 +36,7 @@ import {
 } from "@/lib/verify";
 import { ManualEntry } from "./ManualEntry";
 import { ResultOverlay } from "./ResultOverlay";
+import { Rounds } from "./Rounds";
 
 interface RecentScan {
   clientId: string;
@@ -69,6 +70,7 @@ export function GuardApp({ guardName }: { guardName: string }) {
   const [local, setLocal] = useState<{ rollCallId?: number; present: Record<string, Presence> }>({ present: {} });
   const [sound, setSound] = useState<boolean>(() => storage.get(KEYS.sound, true));
   const [now, setNow] = useState(() => Date.now());
+  const [mode, setMode] = useState<"gate" | "rounds">("gate");
   const [scanning, setScanning] = useState(false);
   const [overlay, setOverlay] = useState<Verdict | null>(null);
   const [torch, setTorch] = useState(false);
@@ -324,6 +326,23 @@ export function GuardApp({ guardName }: { guardName: string }) {
         </div>
       </header>
 
+      <div className="grid grid-cols-2 gap-1 rounded-xl bg-surface p-1 ring-1 ring-line">
+        {(["gate", "rounds"] as const).map((m) => (
+          <button
+            key={m}
+            onClick={() => setMode(m)}
+            aria-pressed={mode === m}
+            className={`h-10 rounded-lg text-sm font-medium ${mode === m ? "bg-surface-2 text-text ring-1 ring-line" : "text-muted"}`}
+          >
+            {m === "gate" ? "Gate scan" : "Room rounds"}
+          </button>
+        ))}
+      </div>
+
+      {mode === "rounds" ? (
+        <Rounds />
+      ) : (
+        <>
       <label className="flex items-center gap-2 rounded-xl bg-surface px-3 ring-1 ring-line">
         <MapPin className="size-5 shrink-0 text-brand" aria-hidden />
         <span className="sr-only">Checkpoint</span>
@@ -459,6 +478,8 @@ export function GuardApp({ guardName }: { guardName: string }) {
           ))}
         </ul>
       </section>
+        </>
+      )}
 
       {manualOpen && (
         <ManualEntry

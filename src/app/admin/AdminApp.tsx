@@ -1,14 +1,14 @@
 "use client";
 
-import { AlertTriangle, CircleCheck, Clock, ScanLine, ShieldX, UserX } from "lucide-react";
+import { AlertTriangle, CircleCheck, Clock, DoorOpen, ScanLine, UserX } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { BASE_PATH, Card, LogoutButton, Logo } from "@/components/ui";
 import type { AdminOverview } from "@/lib/queries";
 import { formatClock, formatDate } from "@/lib/time";
-import { FeedTab, FlagsTab, MissingTab, RecordsTab, RollCallTab, RosterTab } from "./tabs";
+import { FeedTab, FlagsTab, MissingTab, RecordsTab, RollCallTab, RosterTab, RoundsTab } from "./tabs";
 
-type Tab = "feed" | "missing" | "flags" | "records" | "roster" | "rollcall";
+type Tab = "feed" | "rounds" | "missing" | "flags" | "records" | "roster" | "rollcall";
 
 export function AdminApp({ adminName, demoMode }: { adminName: string; demoMode: boolean }) {
   const [rollCallId, setRollCallId] = useState<number | null>(null);
@@ -55,6 +55,7 @@ export function AdminApp({ adminName, demoMode }: { adminName: string; demoMode:
   const tabs: { id: Tab; label: string; count?: number }[] = [
     { id: "feed", label: "Recent scans" },
     { id: "missing", label: "Not back yet", count: stats.missing },
+    { id: "rounds", label: "Room rounds", count: data.rounds.summary.toVisit },
     { id: "flags", label: "Needs review", count: stats.flagsOpen },
     { id: "records", label: "Search & export" },
     { id: "roster", label: "Students" },
@@ -114,8 +115,30 @@ export function AdminApp({ adminName, demoMode }: { adminName: string; demoMode:
         <Kpi icon={<UserX className="size-5 text-brand" />} label="Not back yet" value={stats.missing} sub="tap to see the list" onClick={() => setTab("missing")} />
         <Kpi icon={<Clock className="size-5 text-warn" />} label="Late" value={stats.late} sub="came in after curfew" />
         <Kpi icon={<AlertTriangle className="size-5 text-warn" />} label="Needs review" value={stats.flagsOpen} sub="tap to review" onClick={() => setTab("flags")} />
-        <Kpi icon={<ShieldX className="size-5 text-bad" />} label="Rejected scans" value={stats.rejected} sub="screenshots, duplicates, invalid" />
+        <Kpi
+          icon={<DoorOpen className="size-5 text-brand" />}
+          label="Rooms to visit"
+          value={data.rounds.summary.toVisit}
+          sub={`instead of all ${data.rounds.summary.students}`}
+          onClick={() => setTab("rounds")}
+        />
       </section>
+
+      <p className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border border-line bg-surface px-4 py-2.5 text-sm">
+        <span className="text-muted">How the {stats.present} checked-in students were confirmed:</span>
+        <span>
+          <strong className="tabular-nums">{data.verifiedBy.self}</strong> from their room
+        </span>
+        <span>
+          <strong className="tabular-nums">{data.verifiedBy.qr}</strong> scanned at a gate
+        </span>
+        <span>
+          <strong className="tabular-nums">{data.verifiedBy.round}</strong> seen on rounds
+        </span>
+        <span>
+          <strong className="tabular-nums">{data.verifiedBy.manual}</strong> entered by a guard
+        </span>
+      </p>
 
       <section className="mt-3 grid gap-3 lg:grid-cols-3">
         <Card className="p-4">
@@ -164,6 +187,7 @@ export function AdminApp({ adminName, demoMode }: { adminName: string; demoMode:
       <div className="mt-4">
         {tab === "feed" && <FeedTab records={data.feed} />}
         {tab === "missing" && <MissingTab missing={data.missing} rollCallId={rollCall.id} />}
+        {tab === "rounds" && <RoundsTab rounds={data.rounds} />}
         {tab === "flags" && <FlagsTab flags={data.flags} onResolved={load} />}
         {tab === "records" && <RecordsTab rollCalls={data.rollCalls} defaultRollCallId={rollCall.id} hostels={data.byHostel.map((h) => h.hostel)} />}
         {tab === "roster" && <RosterTab onImported={load} />}

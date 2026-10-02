@@ -1,4 +1,4 @@
-import { ArrowRight, ListChecks, QrCode, Smartphone } from "lucide-react";
+import { ArrowRight, DoorOpen, ListChecks, QrCode } from "lucide-react";
 import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
 import { config } from "@/lib/config";
@@ -29,10 +29,10 @@ export default async function Home() {
 
         <div className="mt-8 grid gap-8 lg:mt-12 lg:grid-cols-[1fr_400px] lg:grid-rows-[auto_1fr] lg:gap-x-12">
           <div className="lg:col-start-1 lg:row-start-1">
-            <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Night attendance without the paper register.</h1>
+            <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Night attendance without knocking on every door.</h1>
             <p className="mt-3 max-w-xl text-muted">
-              Students show a QR pass on their phone at the hostel gate. Security scans it, and the warden can see who is
-              back and who isn&apos;t.
+              Students check in from their own room. The warden only visits the rooms that still need a look, and sees who
+              is in and who isn&apos;t as it happens.
             </p>
           </div>
 
@@ -58,30 +58,30 @@ export default async function Home() {
               </Link>
             )}
 
-            <AccountGroup title="Students" hint="See your QR pass">
+            <AccountGroup title="Students" hint="Check in from your room">
               {students.map((s) => (
                 <DemoLoginButton key={s.id} id={s.id} label={s.name} detail={`${s.hostel}, room ${s.room}`} disabled={!config.demoMode} />
               ))}
             </AccountGroup>
 
-            <AccountGroup title="Security" hint="Scan students at the gate">
+            <AccountGroup title="Security / warden's phone" hint="Gate scan and room rounds">
               {guard && <DemoLoginButton id={guard.id} label={guard.name} detail={guard.title} disabled={!config.demoMode} />}
             </AccountGroup>
 
-            <AccountGroup title="Warden" hint="Dashboard, reports and exports">
+            <AccountGroup title="Warden's office" hint="Dashboard, reports and exports">
               {admin && <DemoLoginButton id={admin.id} label={admin.name} detail={admin.title} disabled={!config.demoMode} />}
             </AccountGroup>
           </section>
 
           <ul className="flex max-w-xl flex-col gap-5 lg:col-start-1 lg:row-start-2">
-            <Point icon={<Smartphone className="size-5" />} title="Scan with any phone">
-              No extra hardware. The scanner keeps working when the gate has no signal.
+            <Point icon={<DoorOpen className="size-5" />} title="Check in from the room">
+              It only counts from the student&apos;s own phone, in their own room, on the hostel Wi-Fi. A friend can&apos;t do it for them.
             </Point>
-            <Point icon={<QrCode className="size-5" />} title="Passes can't be shared">
-              The QR changes every 15 seconds, so a screenshot sent to a friend won&apos;t work.
+            <Point icon={<ListChecks className="size-5" />} title="Rounds only where they're needed">
+              After curfew the warden gets a short list: students with no check-in, plus a few spot checks. About 30 rooms, not 150.
             </Point>
-            <Point icon={<ListChecks className="size-5" />} title="Know who's missing at curfew">
-              A live list of students who haven&apos;t checked in, which you can export to Excel.
+            <Point icon={<QrCode className="size-5" />} title="Gate scan for late arrivals">
+              A QR pass that changes every 15 seconds, scanned with any phone, even with no signal at the gate.
             </Point>
           </ul>
         </div>

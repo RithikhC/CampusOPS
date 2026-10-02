@@ -1,14 +1,15 @@
 "use client";
 
-import { CheckCircle2, Clock, ShieldCheck, Sun, WifiOff } from "lucide-react";
+import { CheckCircle2, Clock, DoorOpen, ShieldCheck, Sun, WifiOff } from "lucide-react";
 import { useEffect, useState } from "react";
-import { keepScreenOn } from "@/components/feedback";
+import { keepScreenOn, unlockAudio } from "@/components/feedback";
 import { QrCode } from "@/components/QrCode";
 import { Avatar, Card, LogoutButton, Logo, ResultBadge, storage } from "@/components/ui";
 import { periodAt, periodStartMs } from "@/lib/pass";
 import type { StudentPassData } from "@/lib/queries";
 import { formatClock, formatDate } from "@/lib/time";
 import { RESULT_META } from "@/lib/verify";
+import { RoomCheckIn } from "./RoomCheckIn";
 
 interface CachedPass {
   data: StudentPassData;
@@ -24,6 +25,8 @@ export function StudentPass({ studentId }: { studentId: string }) {
   const [online, setOnline] = useState(() => navigator.onLine);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [checkingIn, setCheckingIn] = useState(false);
+  const [refresh, setRefresh] = useState(0);
 
   // Keep the pass fresh. Poll faster until checked in so the confirmation shows right after the scan.
   const checkedIn = Boolean(data?.status);
@@ -56,7 +59,7 @@ export function StudentPass({ studentId }: { studentId: string }) {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [checkedIn, cacheKey]);
+  }, [checkedIn, cacheKey, refresh]);
 
   useEffect(() => {
     const tick = window.setInterval(() => setNow(Date.now()), 250);
@@ -131,7 +134,8 @@ export function StudentPass({ studentId }: { studentId: string }) {
           <div>
             <div className="font-semibold">You&apos;re checked in for tonight</div>
             <div className="text-sm text-muted">
-              {formatClock(status.at)} · {status.checkpoint ?? "Gate"}
+              {formatClock(status.at)} ·{" "}
+              {status.method === "self" ? "from your room" : status.method === "round" ? "seen by the warden" : (status.checkpoint ?? "Gate")}
               {status.result !== "valid" && <> · {RESULT_META[status.result].label}</>}
             </div>
           </div>
@@ -149,6 +153,26 @@ export function StudentPass({ studentId }: { studentId: string }) {
         </div>
       )}
 
+      {!status && (
+        <button
+          onClick={() => {
+            unlockAudio();
+            setCheckingIn(true);
+          }}
+          disabled={!data.roomCheckIn.open}
+          className="flex items-center gap-3 rounded-2xl bg-brand-strong p-4 text-left text-white active:scale-[0.99] disabled:bg-surface-2 disabled:text-muted"
+        >
+          <DoorOpen className="size-8 shrink-0" aria-hidden />
+          <span>
+            <span className="block text-lg font-semibold">Check in from my room</span>
+            <span className="block text-sm opacity-90">
+              {data.roomCheckIn.open ? "Scan the tag on your door. No need to wait for the warden." : `Opens at ${formatClock(data.roomCheckIn.opensAt)}`}
+            </span>
+          </span>
+        </button>
+      )}
+
+      <h2 className="mt-1 text-sm font-medium text-muted">Gate pass, if a guard asks or you come back late</h2>
       <section aria-label="Your QR pass" className="rounded-2xl bg-white p-4 text-black">
         {code ? (
           <div className="mx-auto aspect-square w-full max-w-80">
@@ -187,6 +211,17 @@ export function StudentPass({ studentId }: { studentId: string }) {
           <ShieldCheck className="size-4 shrink-0" aria-hidden /> Show this screen, not a screenshot. The code changes every 15 seconds.
         </p>
       </div>
+
+      {checkingIn && (
+        <RoomCheckIn
+          studentId={student.id}
+          room={student.room}
+          onClose={(done) => {
+            setCheckingIn(false);
+            if (done) setRefresh((n) => n + 1);
+          }}
+        />
+      )}
 
       {data.history.length > 0 && (
         <Card className="p-4">

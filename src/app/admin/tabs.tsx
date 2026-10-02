@@ -1,9 +1,12 @@
 "use client";
 
-import { AlertTriangle, CheckCircle2, Download, FileUp, Loader2, RotateCcw, Search, WifiOff } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, FileUp, Loader2, QrCode as QrCodeIcon, RotateCcw, Search, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Avatar, Card, ResultBadge } from "@/components/ui";
+import { QrCode } from "@/components/QrCode";
+import type { PrintableRoomTag } from "@/lib/admin";
 import type { MissingStudent, ScanRecord } from "@/lib/queries";
+import type { Rounds } from "@/lib/rounds";
 import type { RollCall } from "@/lib/rollcall";
 import { formatClock, formatDate, toTimeInput } from "@/lib/time";
 import { RESULT_META } from "@/lib/verify";
@@ -34,7 +37,7 @@ function RecordsTable({ records, showNight = false, empty }: { records: ScanReco
             <th className="px-4 py-2.5 font-medium">Time</th>
             <th className="px-4 py-2.5 font-medium">Student</th>
             <th className="px-4 py-2.5 font-medium">Hostel</th>
-            <th className="px-4 py-2.5 font-medium">Checkpoint</th>
+            <th className="px-4 py-2.5 font-medium">Where</th>
             <th className="px-4 py-2.5 font-medium">Result</th>
             <th className="px-4 py-2.5 font-medium">Detail</th>
             <th className="px-4 py-2.5 font-medium">Scanned by</th>
@@ -78,7 +81,7 @@ function RecordsTable({ records, showNight = false, empty }: { records: ScanReco
                 {r.resolutionNote && <div className="mt-1 text-xs italic">“{r.resolutionNote}” · {r.resolvedBy}</div>}
               </td>
               <td className="px-4 py-2.5 whitespace-nowrap text-muted">
-                {r.scannedBy ?? "—"}
+                {r.scannedBy ?? (r.method === "self" ? "Student's own phone" : "—")}
                 {r.offline && (
                   <div className="flex items-center gap-1 text-xs" title="Scanned offline, synced later">
                     <WifiOff className="size-3" aria-hidden /> synced later
@@ -228,7 +231,7 @@ export function FlagsTab({ flags, onResolved }: { flags: ScanRecord[]; onResolve
                     <ResultBadge result={f.result} />
                   </div>
                   <div className="mt-0.5 text-sm text-muted">
-                    {formatClock(f.scannedAt)} · {f.checkpoint ?? "—"} · {f.scannedBy ?? "—"}
+                    {formatClock(f.scannedAt)} · {f.checkpoint ?? "—"} · {f.scannedBy ?? (f.method === "self" ? "student's own phone" : "—")}
                     {f.hostel && ` · ${f.hostel} ${f.room}`}
                   </div>
                   <p className="mt-2 text-sm">{f.reason}</p>
@@ -345,7 +348,126 @@ interface RosterStudent {
 
 const TEMPLATE = "id,name,email,hostel,room,active\n2025A7PS0001U,New Student,new.student@campus.demo,A-Block,A-101,true\n";
 
+/** Tonight's rounds as the warden sees them on the phone, for the office. */
+export function RoundsTab({ rounds }: { rounds: Rounds }) {
+  const { summary, items } = rounds;
+  return (
+    <div className="flex flex-col gap-3">
+      <Card className="flex flex-wrap items-center gap-x-8 gap-y-2 p-4">
+        <div>
+          <div className="text-3xl font-semibold tabular-nums">
+            {summary.toVisit} <span className="text-base font-normal text-muted">of {summary.students} rooms need a visit</span>
+          </div>
+          <p className="mt-1 text-sm text-muted">
+            {summary.noVisitNeeded} students were confirmed without anyone going to their door. {summary.missing} have no check-in, and{" "}
+            {summary.spotChecks} checked in from their room and were picked for a spot check.
+          </p>
+        </div>
+        <div className="text-sm text-muted">
+          <div>
+            <strong className="text-text tabular-nums">{summary.visited}</strong> visited so far
+          </div>
+          {!rounds.curfewPassed && <div>Curfew is at {formatClock(rounds.rollCall.curfewAt)}; the list will still shrink.</div>}
+        </div>
+      </Card>
+
+      {items.length === 0 ? (
+        <p className="py-8 text-center text-sm text-muted">No rooms to visit.</p>
+      ) : (
+        <Card className="overflow-x-auto">
+          <table className="w-full min-w-[720px] text-left text-sm">
+            <thead className="border-b border-line text-xs text-muted">
+              <tr>
+                <th className="px-4 py-2.5 font-medium">Room</th>
+                <th className="px-4 py-2.5 font-medium">Student</th>
+                <th className="px-4 py-2.5 font-medium">Why this room</th>
+                <th className="px-4 py-2.5 font-medium">At the door</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line">
+              {items.map((item) => (
+                <tr key={item.student.id}>
+                  <td className="px-4 py-2.5 whitespace-nowrap">
+                    <span className="font-medium">{item.student.room}</span> <span className="text-muted">{item.student.hostel}</span>
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <div className="flex items-center gap-2.5">
+                      <Avatar name={item.student.name} id={item.student.id} size={26} />
+                      <span className="font-medium">{item.student.name}</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-2.5 text-muted">
+                    {item.kind === "spot" && <span className="mr-1.5 rounded-full bg-warn/15 px-2 py-0.5 text-xs font-medium text-warn">Spot check</span>}
+                    {item.reasons.join(" · ")}
+                    {item.kind === "spot" && item.checkedInAt && ` · checked in from room at ${formatClock(item.checkedInAt)}`}
+                  </td>
+                  <td className="px-4 py-2.5 whitespace-nowrap">
+                    {item.visit ? (
+                      <span className={item.visit.outcome === "present" ? "text-ok" : "text-bad"}>
+                        {item.visit.outcome === "present" ? "In room" : "Not in room"} · {formatClock(item.visit.at)}
+                        {item.visit.by && <span className="text-muted"> · {item.visit.by}</span>}
+                      </span>
+                    ) : (
+                      <span className="text-muted">Not visited yet</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+/** Printable sheet of the signed QR tags that go inside each room. */
+function RoomTags({ onClose }: { onClose: () => void }) {
+  const [tags, setTags] = useState<PrintableRoomTag[] | null>(null);
+
+  useEffect(() => {
+    const first = window.setTimeout(async () => {
+      const response = await fetch("/api/admin/roomtags", { cache: "no-store" });
+      if (response.ok) setTags((await response.json()).tags);
+    }, 0);
+    return () => window.clearTimeout(first);
+  }, []);
+
+  return (
+    <Card className="p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="font-medium">Room tags</h2>
+          <p className="text-sm text-muted">Print these and stick one inside each room, on the back of the door. Students scan theirs to check in.</p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={() => window.print()} className={`${button} bg-brand-strong text-white`} disabled={!tags}>
+            Print
+          </button>
+          <button onClick={onClose} className={`${button} bg-surface-2 ring-1 ring-line`}>
+            Close
+          </button>
+        </div>
+      </div>
+      {!tags ? (
+        <p className="py-6 text-sm text-muted">Loading…</p>
+      ) : (
+        <div className="print-area mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
+          {tags.map((tag) => (
+            <div key={`${tag.hostel}-${tag.room}`} className="break-inside-avoid rounded-lg border border-line bg-white p-2 text-center text-black">
+              <QrCode value={tag.code} label={`Room tag ${tag.room}`} />
+              <div className="text-sm font-semibold">{tag.room}</div>
+              <div className="text-[10px] text-neutral-600">{tag.hostel} · NightPass room tag</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export function RosterTab({ onImported }: { onImported: () => void }) {
+  const [showTags, setShowTags] = useState(false);
   const [students, setStudents] = useState<RosterStudent[] | null>(null);
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<{ added: number; updated: number; errors: string[] } | null>(null);
@@ -425,8 +547,13 @@ export function RosterTab({ onImported }: { onImported: () => void }) {
         )}
       </Card>
 
+      {showTags && <RoomTags onClose={() => setShowTags(false)} />}
+
       <div className="flex flex-wrap items-center gap-2">
         <SearchBox value={query} onChange={setQuery} placeholder="Search roster" />
+        <button onClick={() => setShowTags(!showTags)} className={`${button} bg-surface-2 ring-1 ring-line hover:ring-brand`}>
+          <QrCodeIcon className="size-4" aria-hidden /> Room tags
+        </button>
         {byHostel.map(([hostel, count]) => (
           <span key={hostel} className="rounded-full bg-surface px-3 py-1 text-sm ring-1 ring-line">
             {hostel}: <span className="tabular-nums">{count}</span>

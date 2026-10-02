@@ -12,7 +12,11 @@ declare global {
   interface Window {
     __nightpassBackend?: Promise<DemoBackend>;
     __nightpassOffline?: boolean;
-    __nightpassCamera?: { show(code: string, holdMs?: number): void };
+    __nightpassCamera?: { show(code: string, holdMs?: number, style?: "pass" | "tag"): void };
+    /** Demo only: pretend the student's phone is away from the hostel network. */
+    __nightpassOffCampus?: boolean;
+    /** Demo only: pretend the check-in comes from someone else's phone. */
+    __nightpassDeviceOverride?: string;
   }
 }
 

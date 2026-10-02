@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink, Loader2, RotateCcw, ScanLine, Smartphone, Wifi, WifiOff } from "lucide-react";
+import { Clock, DoorOpen, ExternalLink, Loader2, RotateCcw, ScanLine, Smartphone, Wifi, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Logo } from "@/components/ui";
 import { parseCsv } from "@/lib/csv";
@@ -144,6 +144,60 @@ export default function DemoConsole() {
     [backend, find, frameWindow, studentId, tap],
   );
 
+  /**
+   * The student checks in from their room: opens the check-in screen and points the phone at the
+   * tag on the door. Options simulate doing it from outside the hostel, or on someone else's phone.
+   */
+  const roomCheckIn = useCallback(
+    async (options: { offCampus?: boolean; otherPhone?: boolean } = {}, who = studentId) => {
+      const student = frameWindow("student");
+      if (!student) return false;
+      student.__nightpassOffCampus = Boolean(options.offCampus);
+      student.__nightpassDeviceOverride = options.otherPhone ? "a-friends-phone" : undefined;
+      if (find("student", "Try again")) await tap("student", "Try again");
+      else if (!(await tap("student", "Check in from my room"))) return false;
+      await new Promise((resolve) => window.setTimeout(resolve, 1300));
+      student.__nightpassCamera?.show(await (await backend).roomTag(who), 2000, "tag");
+      return true;
+    },
+    [backend, find, frameWindow, studentId, tap],
+  );
+
+  /** Clicks a button inside the card or row that mentions `rowText` (e.g. "In room" for one student). */
+  const tapWithin = useCallback(
+    async (device: Device, rowText: string, target: string) => {
+      const doc = frameWindow(device)?.document;
+      if (!doc) return false;
+      let best: { el: HTMLElement; depth: number } | null = null;
+      for (const el of doc.querySelectorAll<HTMLElement>("button")) {
+        if (!el.textContent?.trim().startsWith(target)) continue;
+        let node: HTMLElement | null = el.parentElement;
+        for (let depth = 1; node && depth <= 6; depth++, node = node.parentElement) {
+          if (node.textContent?.includes(rowText)) {
+            if (!best || depth < best.depth) best = { el, depth };
+            break;
+          }
+        }
+      }
+      if (!best) return false;
+      best.el.setAttribute("data-demo-target", "1");
+      const done = await tap(device, "[data-demo-target]");
+      best.el.removeAttribute("data-demo-target");
+      return done;
+    },
+    [frameWindow, tap],
+  );
+
+  /** Makes curfew "just passed", so the warden's rounds can start. */
+  const curfewPasses = useCallback(async () => {
+    const api = await backend;
+    const warden = { id: "admin-1", name: "Warden", role: "admin" as const };
+    const overview = JSON.parse((await api.handle(warden, "GET", "/api/admin/overview", null)).body);
+    const time = new Date(Date.now() - 60_000).toLocaleTimeString("en-GB", { timeZone: "Asia/Dubai", hour: "2-digit", minute: "2-digit" });
+    await api.handle(warden, "POST", "/api/admin/rollcall", JSON.stringify({ action: "curfew", rollCallId: overview.rollCall.id, time }));
+    if (find("guard", "Room rounds")) await tap("guard", "Room rounds");
+  }, [backend, find, tap]);
+
   const showCsv = useCallback(
     async (kind: "records" | "missing") => {
       const api = await backend;
@@ -186,6 +240,9 @@ export default function DemoConsole() {
       tap,
       type: typeText,
       showPass,
+      roomCheckIn,
+      tapWithin,
+      curfewPasses,
       showCsv,
       hideCsv: () => setCsv(null),
       setStudent: setStudentId,
@@ -199,11 +256,11 @@ export default function DemoConsole() {
       ready: () => backend.then(() => true),
     };
     (window as unknown as { __nightpassDirector: typeof director }).__nightpassDirector = director;
-  }, [tap, typeText, showPass, showCsv, setOffline, reset, setCurfew, frameWindow, backend]);
+  }, [tap, typeText, showPass, roomCheckIn, tapWithin, curfewPasses, showCsv, setOffline, reset, setCurfew, frameWindow, backend]);
 
   const scale = Math.min(present ? 2 : 1.1, (width - (present ? 0 : 32)) / DESIGN_W);
   const small = !present && width < 900;
-  const studentName = DEMO_STUDENTS.find((s) => s.id === studentId)?.name ?? "";
+  const firstName = (DEMO_STUDENTS.find((s) => s.id === studentId)?.name ?? "").split(" ")[0];
 
   const stage = (
     <div style={{ height: 800 * scale }} className="relative">
@@ -217,7 +274,7 @@ export default function DemoConsole() {
             <iframe key={`s-${studentId}-${reloadKey}`} ref={studentFrame} title="Student pass" src={`${BASE_PATH}/student/?id=${studentId}`} style={phoneFrameStyle} />
           </Phone>
         </DeviceFrame>
-        <DeviceFrame label="Guard's phone" dim={highlight !== null && highlight !== "guard"} lit={highlight === "guard"}>
+        <DeviceFrame label="Guard / warden's phone" dim={highlight !== null && highlight !== "guard"} lit={highlight === "guard"}>
           <Phone>
             <iframe key={`g-${reloadKey}`} ref={guardFrame} title="Guard scanner" src={`${BASE_PATH}/guard/`} style={phoneFrameStyle} />
           </Phone>
@@ -282,7 +339,7 @@ export default function DemoConsole() {
   return (
     <main className="min-h-dvh bg-[#0b1120] pb-10 text-white">
       <header className="mx-auto flex max-w-[1800px] flex-wrap items-center justify-between gap-4 px-4 py-5 sm:px-6">
-        <Logo subtitle="Live demo: hostel night attendance" />
+        <Logo subtitle="Live demo: night attendance without knocking on every door" />
         <a href={REPO_URL} className="inline-flex items-center gap-1.5 text-sm text-[#93c5fd] hover:underline">
           Source code and docs <ExternalLink className="size-4" aria-hidden />
         </a>
@@ -290,41 +347,56 @@ export default function DemoConsole() {
 
       <section className="mx-auto max-w-[1800px] px-4 sm:px-6">
         <p className="max-w-3xl text-[#c7cfdd]">
-          This is the real NightPass app with sample data, running entirely in your browser. Press{" "}
-          <strong className="text-white">Hold pass up to scanner</strong> and watch the guard&apos;s phone, the student&apos;s
-          phone and the warden&apos;s dashboard. You can also tap around inside any of the three screens.
+          This is the real NightPass app with sample data, running entirely in your browser. Follow the three steps below and
+          watch the student&apos;s phone, the warden&apos;s phone and the dashboard. You can also tap around inside any of the screens.
         </p>
 
         {!small && (
-          <div className="mt-5 flex flex-wrap items-center gap-2">
-            <label className="flex items-center gap-2 rounded-lg bg-white/5 px-3 py-2 text-sm ring-1 ring-white/10">
-              Student
-              <select
-                value={studentId}
-                onChange={(e) => setStudentId(e.target.value)}
-                className="bg-transparent font-medium outline-none"
-                aria-label="Which student"
-              >
-                {DEMO_STUDENTS.map((s) => (
-                  <option key={s.id} value={s.id} className="bg-[#131b2e]">
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button onClick={() => showPass(0)} disabled={!ready} className={`${controlBtn} bg-[#2563eb] text-white hover:bg-[#1d4ed8]`}>
-              <ScanLine className="size-4" aria-hidden /> Hold {studentName.split(" ")[0]}&apos;s pass up to scanner
-            </button>
-            <button onClick={() => showPass(6)} disabled={!ready} className={`${controlBtn} bg-white/10 hover:bg-white/15`}>
-              Try an old screenshot instead
-            </button>
-            <button onClick={() => setOffline(!offline)} disabled={!ready} className={`${controlBtn} bg-white/10 hover:bg-white/15`}>
-              {offline ? <WifiOff className="size-4 text-[#fbbf24]" aria-hidden /> : <Wifi className="size-4" aria-hidden />}
-              {offline ? "Guard phone is offline (tap to reconnect)" : "Take guard phone offline"}
-            </button>
-            <button onClick={reset} disabled={!ready} className={`${controlBtn} text-[#c7cfdd] hover:bg-white/10`}>
-              <RotateCcw className="size-4" aria-hidden /> Reset demo
-            </button>
+          <div className="mt-5 grid gap-3 xl:grid-cols-3">
+            <ControlGroup step="1" title="In the room, before curfew">
+              <label className="flex h-10 items-center gap-2 rounded-lg bg-white/5 px-3 text-sm ring-1 ring-white/10">
+                Student
+                <select value={studentId} onChange={(e) => setStudentId(e.target.value)} className="bg-transparent font-medium outline-none" aria-label="Which student">
+                  {DEMO_STUDENTS.map((st) => (
+                    <option key={st.id} value={st.id} className="bg-[#131b2e]">
+                      {st.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button onClick={() => roomCheckIn()} disabled={!ready} className={`${controlBtn} bg-[#2563eb] text-white hover:bg-[#1d4ed8]`}>
+                <DoorOpen className="size-4" aria-hidden /> {firstName} checks in from the room
+              </button>
+              <button onClick={() => roomCheckIn({ offCampus: true })} disabled={!ready} className={`${controlBtn} bg-white/10 hover:bg-white/15`}>
+                Try it from outside the hostel
+              </button>
+              <button onClick={() => roomCheckIn({ otherPhone: true })} disabled={!ready} className={`${controlBtn} bg-white/10 hover:bg-white/15`}>
+                Try it from a friend&apos;s phone
+              </button>
+            </ControlGroup>
+
+            <ControlGroup step="2" title="After curfew: the warden's rounds">
+              <button onClick={curfewPasses} disabled={!ready} className={`${controlBtn} bg-[#2563eb] text-white hover:bg-[#1d4ed8]`}>
+                <Clock className="size-4" aria-hidden /> Curfew passes: start the rounds
+              </button>
+              <span className="text-sm text-[#8b95a8]">Then tap In room or Not in room on the warden&apos;s phone.</span>
+            </ControlGroup>
+
+            <ControlGroup step="3" title="At the gate, for late arrivals">
+              <button onClick={() => showPass(0)} disabled={!ready} className={`${controlBtn} bg-white/10 hover:bg-white/15`}>
+                <ScanLine className="size-4" aria-hidden /> Hold {firstName}&apos;s pass up to the scanner
+              </button>
+              <button onClick={() => showPass(6)} disabled={!ready} className={`${controlBtn} bg-white/10 hover:bg-white/15`}>
+                Use an old screenshot
+              </button>
+              <button onClick={() => setOffline(!offline)} disabled={!ready} className={`${controlBtn} bg-white/10 hover:bg-white/15`}>
+                {offline ? <WifiOff className="size-4 text-[#fbbf24]" aria-hidden /> : <Wifi className="size-4" aria-hidden />}
+                {offline ? "Scanner is offline (tap to reconnect)" : "Take the scanner offline"}
+              </button>
+              <button onClick={reset} disabled={!ready} className={`${controlBtn} text-[#c7cfdd] hover:bg-white/10`}>
+                <RotateCcw className="size-4" aria-hidden /> Reset demo
+              </button>
+            </ControlGroup>
           </div>
         )}
       </section>
@@ -332,12 +404,12 @@ export default function DemoConsole() {
       {small ? (
         <section className="mx-auto mt-6 flex max-w-md flex-col gap-3 px-4">
           <p className="text-sm text-[#c7cfdd]">
-            On a phone, open one screen at a time. Try the guard scanner on one phone and a student pass on another: the
-            scanner will read it with the real camera.
+            On a phone, open one screen at a time. Try the gate scanner on one phone and a student pass on another: the
+            scanner will read it with the real camera. The side-by-side demo needs a laptop screen.
           </p>
           {[
-            { href: "/student/", title: "Student pass", text: "The rotating QR code" },
-            { href: "/guard/", title: "Gate scanner", text: "Uses your camera" },
+            { href: "/student/", title: "Student", text: "Room check-in and gate pass" },
+            { href: "/guard/", title: "Guard / warden", text: "Gate scanner and room rounds" },
             { href: "/admin/", title: "Warden dashboard", text: "Best on a laptop" },
           ].map((link) => (
             <a key={link.href} href={`${BASE_PATH}${link.href}`} className="flex items-center gap-3 rounded-xl bg-white/5 p-4 ring-1 ring-white/10">
@@ -355,7 +427,8 @@ export default function DemoConsole() {
 
       {!small && (
         <p className="mx-auto mt-6 max-w-[1800px] px-4 text-sm text-[#8b95a8] sm:px-6">
-          The guard phone here uses a simulated camera, because a webcam can&apos;t see a phone drawn on the same screen. Open
+          The two phones here use simulated cameras, because a webcam can&apos;t see things drawn on the same screen. The demo
+          roll call always runs now, with curfew about 25 minutes away, whatever time you open it. Open
           the{" "}
           <a className="underline" href={`${BASE_PATH}/guard/`}>
             gate scanner
@@ -373,6 +446,18 @@ export default function DemoConsole() {
 }
 
 const controlBtn = "inline-flex h-10 items-center gap-2 rounded-lg px-3.5 text-sm font-medium disabled:opacity-50";
+
+function ControlGroup({ step, title, children }: { step: string; title: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-xl bg-white/[0.03] p-3 ring-1 ring-white/10">
+      <div className="mb-2.5 flex items-center gap-2 text-sm font-medium">
+        <span className="grid size-6 place-items-center rounded-full bg-[#2563eb] text-xs">{step}</span>
+        {title}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">{children}</div>
+    </div>
+  );
+}
 const phoneFrameStyle = {
   width: PHONE.w,
   height: PHONE.h,

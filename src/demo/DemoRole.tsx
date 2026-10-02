@@ -5,6 +5,7 @@ import { useState } from "react";
 import { AdminApp } from "@/app/admin/AdminApp";
 import { GuardApp } from "@/app/guard/GuardApp";
 import { StudentPass } from "@/app/student/StudentPass";
+import { phoneOf } from "@/lib/seed";
 import type { Role } from "@/lib/session";
 import { installFakeCamera } from "./camera";
 import { demoUser, getBackend, installApiShim, isEmbedded } from "./client";
@@ -17,7 +18,16 @@ export default function DemoRole({ role }: { role: Role }) {
     const user = demoUser(role);
     const embedded = isEmbedded();
     installApiShim(user);
-    if (role === "guard" && embedded) installFakeCamera();
+    if (embedded && role === "guard") installFakeCamera("gate");
+    if (embedded && role === "student") installFakeCamera("room");
+    // In the demo each student's "phone" has a fixed ID that matches the sample data.
+    if (role === "student") {
+      try {
+        window.localStorage.setItem(`np_device_${user.id}`, JSON.stringify(phoneOf(user.id)));
+      } catch {
+        // Storage blocked: the check-in will register whatever ID the page makes up.
+      }
+    }
     void getBackend();
     return { user, embedded };
   });

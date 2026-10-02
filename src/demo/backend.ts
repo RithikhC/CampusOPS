@@ -3,19 +3,24 @@
  * data functions as the real server (queries, scans, admin) on top of PGlite, which is Postgres
  * compiled to WebAssembly. Every visitor gets their own fresh copy of the demo data.
  */
-import { importRoster, resolveFlag, setCurfew, startNewRollCall } from "@/lib/admin";
+import { importRoster, listRoomTags, resolveFlag, setCurfew, startNewRollCall } from "@/lib/admin";
 import { config } from "@/lib/config";
 import { toCsv } from "@/lib/csv";
 import { prepareDb, type Db } from "@/lib/dbcore";
 import { periodAt, signPass } from "@/lib/pass";
 import { adminOverview, filtersFromSearchParams, guardBootstrap, searchRecords, studentPass } from "@/lib/queries";
+import { roomCheckIn } from "@/lib/roomcheck";
+import { signRoomTag } from "@/lib/roomtag";
+import { buildRounds, recordVisit } from "@/lib/rounds";
 import { parseIncomingScans, recordScans } from "@/lib/scans";
-import { resetDemoData } from "@/lib/seed";
+import { resetDemoData, type SeedOptions } from "@/lib/seed";
 import type { Role, SessionUser } from "@/lib/session";
 import { formatClock, formatDate } from "@/lib/time";
 import { RESULT_META } from "@/lib/verify";
 
 const PGLITE_CDN = "https://cdn.jsdelivr.net/npm/@electric-sql/pglite@0.5.8/dist";
+/** The demo's roll call always runs "now", with curfew a little way off, whatever time it is opened. */
+const SEED: SeedOptions = { curfewInMinutes: 25, registerDemoPhones: true };
 
 export interface ApiResult {
   status: number;
@@ -27,6 +32,8 @@ export interface DemoBackend {
   handle(user: SessionUser, method: string, url: string, body: string | null): Promise<ApiResult>;
   /** The code a student's phone is showing right now, or `periodsAgo` periods ago (an old screenshot). */
   passCode(studentId: string, periodsAgo?: number): string;
+  /** The tag stuck inside a student's room. */
+  roomTag(studentId: string): Promise<string>;
   reset(): Promise<void>;
 }
 
@@ -56,12 +63,16 @@ export async function createBackend(): Promise<DemoBackend> {
       await pg.exec(sql);
     },
   };
-  await prepareDb(db);
+  await prepareDb(db, SEED);
 
   return {
     handle: (user, method, url, body) => route(db, user, method, url, body).catch((error: Error) => json(500, { error: error.message })),
     passCode: (studentId, periodsAgo = 0) => signPass(studentId, periodAt(Date.now()) - periodsAgo, config.qrSigningKey),
-    reset: () => resetDemoData(db),
+    roomTag: async (studentId) => {
+      const [student] = await db.query<{ hostel: string; room: string }>(`select hostel, room from students where id = $1`, [studentId]);
+      return signRoomTag(student.hostel, student.room, config.qrSigningKey);
+    },
+    reset: () => resetDemoData(db, SEED),
   };
 }
 
@@ -85,6 +96,26 @@ async function route(db: Db, user: SessionUser, method: string, rawUrl: string, 
     if (!allowed(user, ["student"])) return forbidden;
     const pass = await studentPass(db, user.id);
     return pass ? json(200, pass) : json(404, { error: "Your pass is not active" });
+  }
+
+  if (path === "/api/student/checkin" && method === "POST") {
+    if (!allowed(user, ["student"])) return forbidden;
+    // There is no real network to check in the browser demo, so the demo page says where the phone "is".
+    const outcome = await roomCheckIn(db, user.id, {
+      tag: String(body.tag ?? ""),
+      deviceId: String(body.deviceId ?? ""),
+      onCampus: !body.simulateOffCampus,
+    });
+    return json(200, outcome);
+  }
+
+  if (path === "/api/guard/rounds") {
+    if (!allowed(user, ["guard", "admin"])) return forbidden;
+    if (method === "POST") {
+      const outcome = body.outcome === "absent" ? "absent" : "present";
+      if (!(await recordVisit(db, user, String(body.studentId ?? ""), outcome))) return json(404, { error: "Student not found" });
+    }
+    return json(200, await buildRounds(db));
   }
 
   if (path === "/api/guard/bootstrap" && method === "GET") {
@@ -162,8 +193,10 @@ async function route(db: Db, user: SessionUser, method: string, rawUrl: string, 
     return json(200, { students: await db.query(`select id, name, email, hostel, room, active from students order by hostel, name`) });
   }
 
+  if (path === "/api/admin/roomtags") return json(200, { tags: await listRoomTags(db) });
+
   if (path === "/api/admin/reset" && method === "POST") {
-    await resetDemoData(db);
+    await resetDemoData(db, SEED);
     return json(200, { ok: true });
   }
 
