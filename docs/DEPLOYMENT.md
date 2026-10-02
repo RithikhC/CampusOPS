@@ -14,8 +14,9 @@ NightPass is a normal Next.js app with a Postgres database. Pick whichever optio
 | Variable | Needed? | What it's for |
 | --- | --- | --- |
 | `DATABASE_URL` | Recommended when deployed | Postgres connection string. If it's not set, the built-in PGlite database is used (stored in `./.data`, or `/tmp` on Vercel). |
-| `QR_SIGNING_KEY` | Yes, when deployed | The private key that signs student passes (64 hex characters). |
+| `QR_SIGNING_KEY` | Yes, when deployed | The private key that signs room tags and student passes (64 hex characters). |
 | `AUTH_SECRET` | Yes, when deployed | Secret used to sign login cookies. |
+| `CAMPUS_NETWORKS` | For real use | The hostel Wi-Fi's address ranges, comma separated, e.g. `10.20.0.0/16,172.16.8.0/22`. Room check-ins are only accepted from these. If it's not set, every request counts as on campus. |
 | `DEMO_MODE` | No, defaults to `true` | Turns on the demo accounts and the "Reset demo data" button. Set it to `false` for real use. |
 
 To generate the two keys:
@@ -24,9 +25,17 @@ To generate the two keys:
 npm run keys
 ```
 
-Keep `QR_SIGNING_KEY` the same once you've set it. If it changes, the passes already on students' phones stop working until they refresh (which happens by itself within a minute if they're online).
+Keep `QR_SIGNING_KEY` the same once you've set it. If it changes, the room tags you've printed stop working and have to be printed again. Passes on students' phones refresh by themselves within a minute.
 
 The tables are created automatically on the first start, and demo data is added if there are no students yet. There's no separate migration step.
+
+## Setting up a hostel
+
+1. **Import the students.** On the warden dashboard open **Students** and use **Import CSV** (`id,name,email,hostel,room`).
+2. **Print the room tags.** On the same tab press **Room tags**, then **Print**. There's one QR sticker per room, already signed. Stick each one inside its room, on the back of the door.
+3. **Set the hostel network.** Ask campus IT for the hostel Wi-Fi address ranges and put them in `CAMPUS_NETWORKS`. On a campus server these are the internal ranges (like `10.20.0.0/16`). If the app is hosted outside the campus, use the public addresses the hostel Wi-Fi goes out through. Behind a reverse proxy, the proxy must pass the client's address in `x-forwarded-for` (Vercel and Render do; for nginx add `proxy_set_header X-Forwarded-For $remote_addr;`).
+4. **Phones register themselves.** The first time a student checks in, that phone becomes their registered phone. When a student changes phone, the hostel office removes their row from `student_devices` and the next check-in registers the new one (and puts them on that night's spot checks).
+5. **Set the curfew** under **Settings**. Room check-in opens 90 minutes before it.
 
 ## Option 0: GitHub Pages (browser-only demo)
 
@@ -100,5 +109,7 @@ Open the `https://....trycloudflare.com` address it prints on your phone. Sign i
 - [ ] Set `QR_SIGNING_KEY` and `AUTH_SECRET` as secrets
 - [ ] Point `DATABASE_URL` at a managed Postgres with backups
 - [ ] Import the real student list (warden dashboard, **Students** tab, **Import CSV**)
+- [ ] Set `CAMPUS_NETWORKS` to the hostel Wi-Fi ranges, and check that a check-in over mobile data is refused
+- [ ] Print the room tags and stick one inside each room
 - [ ] Rename the gates and staff to match the campus (`checkpoints` and `staff` tables)
 - [ ] Serve everything over https
