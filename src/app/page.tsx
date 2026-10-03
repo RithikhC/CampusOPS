@@ -1,4 +1,4 @@
-import { ArrowRight, DoorOpen, ListChecks, QrCode, Siren } from "lucide-react";
+import { ArrowRight, DoorOpen, FileSearch, ListChecks, QrCode } from "lucide-react";
 import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
 import { config } from "@/lib/config";
@@ -31,8 +31,8 @@ export default async function Home() {
           <div className="lg:col-start-1 lg:row-start-1">
             <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Night attendance without knocking on every door.</h1>
             <p className="mt-3 max-w-xl text-muted">
-              Students check in from their own room. The warden only visits the rooms that still need a look, sees who is
-              in and who isn&apos;t as it happens, and in an emergency knows which rooms to check first.
+              Record, verify and review who is in at night. Students scan in from their own room or at the gate, every entry
+              is checked against the student list, and staff see, search and export the records as they come in.
             </p>
           </div>
 
@@ -74,20 +74,21 @@ export default async function Home() {
           </section>
 
           <ul className="flex max-w-xl flex-col gap-5 lg:col-start-1 lg:row-start-2">
-            <Point icon={<DoorOpen className="size-5" />} title="Check in from the room">
-              Confirmed with the student&apos;s fingerprint or face on their own phone, in their own room, on the hostel Wi-Fi. A
-              friend can&apos;t do it for them.
-            </Point>
-            <Point icon={<ListChecks className="size-5" />} title="Rounds only where they're needed">
-              After curfew the warden gets a short list: students with no check-in, plus a few spot checks. About 35 rooms, not 150.
+            <Point icon={<DoorOpen className="size-5" />} title="Scan in from the room">
+              The student scans the tag on their door and confirms with their fingerprint, on their own phone and the hostel
+              Wi-Fi. A friend can&apos;t do it for them.
             </Point>
             <Point icon={<QrCode className="size-5" />} title="Gate scan for late arrivals">
               A QR pass that changes every 15 seconds, scanned with any phone, even with no signal at the gate.
             </Point>
-            <Point icon={<Siren className="size-5" />} title="Emergency headcount">
-              If the fire alarm goes off, students tap I&apos;m safe, guards scan passes at the assembly point, and the warden sees
-              who is still inside, room by room.
+            <Point icon={<FileSearch className="size-5" />} title="Every entry verified, recorded and flagged">
+              Date, time, place and method are saved for every attempt. Duplicates, invalid codes and manual entries are flagged,
+              and staff can search and export everything.
             </Point>
+            <Point icon={<ListChecks className="size-5" />} title="Follow-up only where it's needed">
+              After curfew the warden gets a short list: students with no check-in, plus a few spot checks. About 35 rooms, not 150.
+            </Point>
+            <li className="text-sm text-muted">Add-on: an emergency headcount for fire alarms, using tonight&apos;s records.</li>
           </ul>
         </div>
       </main>

@@ -37,7 +37,7 @@ The tables are created automatically on the first start, and demo data is added 
 4. **Phones register themselves.** The first time a student checks in, that phone becomes their registered phone and sets up its passkey (the fingerprint / face check). When a student changes phone, the hostel office removes their row from `student_devices` and the next check-in registers the new one (and puts them on that night's spot checks).
    Passkeys belong to the website's address. Pick the final address before students start using it: if it changes, every phone has to be registered again.
 5. **Set the curfew** under **Settings**. Room check-in opens 90 minutes before it.
-6. **Practise a headcount.** During a fire drill, start an **Emergency headcount** from the dashboard so students and guards see how it works before it matters.
+6. **Optional, for the emergency headcount add-on:** during a fire drill, start an **Emergency headcount** from the dashboard so students and guards see how it works before it matters.
 
 ## Option 0: GitHub Pages (browser-only demo)
 

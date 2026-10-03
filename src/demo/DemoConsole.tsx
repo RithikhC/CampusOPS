@@ -408,7 +408,7 @@ export default function DemoConsole() {
   return (
     <main className="min-h-dvh bg-[#0b1120] pb-10 text-white">
       <header className="mx-auto flex max-w-[1800px] flex-wrap items-center justify-between gap-4 px-4 py-5 sm:px-6">
-        <Logo subtitle="Live demo: night attendance without knocking on every door" />
+        <Logo subtitle="Live demo: night attendance scanning" />
         <a href={REPO_URL} className="inline-flex items-center gap-1.5 text-sm text-[#93c5fd] hover:underline">
           Source code and docs <ExternalLink className="size-4" aria-hidden />
         </a>
@@ -416,13 +416,14 @@ export default function DemoConsole() {
 
       <section className="mx-auto max-w-[1800px] px-4 sm:px-6">
         <p className="max-w-3xl text-[#c7cfdd]">
-          This is the real NightPass app with sample data, running entirely in your browser. Follow the steps below and watch
-          the student&apos;s phone, the warden&apos;s phone and the dashboard. You can also tap around inside any of the screens.
+          This is the real NightPass app with sample data, running entirely in your browser. Follow the steps below to record,
+          verify and review night attendance, and watch the student&apos;s phone, the guard / warden&apos;s phone and the dashboard.
+          You can also tap around inside any of the screens.
         </p>
 
         {!small && (
           <div className="mt-5 grid gap-3 lg:grid-cols-2">
-            <ControlGroup step="1" title="In the room, before curfew">
+            <ControlGroup step="1" title="Record and verify: scanning in from the room">
               <label className="flex h-10 items-center gap-2 rounded-lg bg-white/5 px-3 text-sm ring-1 ring-white/10">
                 Student
                 <select value={studentId} onChange={(e) => setStudentId(e.target.value)} className="bg-transparent font-medium outline-none" aria-label="Which student">
@@ -436,7 +437,7 @@ export default function DemoConsole() {
               <button onClick={() => roomCheckIn()} disabled={!ready} className={`${controlBtn} bg-[#2563eb] text-white hover:bg-[#1d4ed8]`}>
                 <DoorOpen className="size-4" aria-hidden /> {firstName} checks in from the room
               </button>
-              <span className="w-full text-sm text-[#8b95a8]">Or try to cheat:</span>
+              <span className="w-full text-sm text-[#8b95a8]">Entries that fail verification (each one is refused and recorded):</span>
               <button onClick={() => roomCheckIn({ nextDoor: true })} disabled={!ready} className={`${controlBtn} bg-white/10 hover:bg-white/15`}>
                 From the room next door
               </button>
@@ -451,7 +452,7 @@ export default function DemoConsole() {
               </button>
             </ControlGroup>
 
-            <ControlGroup step="2" title="At the gate, for late arrivals">
+            <ControlGroup step="2" title="Record at the gate: late arrivals, duplicates, screenshots">
               <button onClick={() => showPass(0)} disabled={!ready} className={`${controlBtn} bg-white/10 hover:bg-white/15`}>
                 <ScanLine className="size-4" aria-hidden /> Hold {firstName}&apos;s pass up to the scanner
               </button>
@@ -462,10 +463,12 @@ export default function DemoConsole() {
                 {offline ? <WifiOff className="size-4 text-[#fbbf24]" aria-hidden /> : <Wifi className="size-4" aria-hidden />}
                 {offline ? "Scanner is offline (tap to reconnect)" : "Take the scanner offline"}
               </button>
-              <span className="w-full text-sm text-[#8b95a8]">No phone? Use Manual entry on the guard&apos;s phone.</span>
+              <span className="w-full text-sm text-[#8b95a8]">
+                No phone? Use Manual entry on the guard&apos;s phone. Then review, search and export everything on the dashboard.
+              </span>
             </ControlGroup>
 
-            <ControlGroup step="3" title="After curfew: the warden's rounds">
+            <ControlGroup step="3" title="Follow up after curfew: the warden's rounds">
               <button onClick={curfewPasses} disabled={!ready} className={`${controlBtn} bg-[#2563eb] text-white hover:bg-[#1d4ed8]`}>
                 <Clock className="size-4" aria-hidden /> Curfew passes: start the rounds
               </button>
@@ -474,7 +477,7 @@ export default function DemoConsole() {
               </span>
             </ControlGroup>
 
-            <ControlGroup step="4" title="Emergency at night">
+            <ControlGroup step="+" title="Add-on: emergency headcount">
               <button onClick={startHeadcount} disabled={!ready} className={`${controlBtn} bg-[#b91c1c] text-white hover:bg-[#991b1b]`}>
                 <Siren className="size-4" aria-hidden /> Fire alarm: start a headcount
               </button>

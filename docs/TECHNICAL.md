@@ -4,7 +4,16 @@ This document explains how NightPass is put together and why we made the choices
 
 ## The idea in one paragraph
 
-Checking every room every night is slow, and scanning everyone at a gate only moves the queue somewhere else. NightPass lets students who are already in their room confirm it themselves, with their own fingerprint on their own phone, and makes that confirmation hard to fake. Then it sends the warden only to the rooms where something is missing or uncertain. The gate scanner is kept for students who come back late. And because NightPass knows who checked in tonight, it can tell responders which rooms to check first if there's an emergency.
+Problem Statement 03 asks for a night attendance scanning system that lets campus teams **record, verify and review** presence, and flag duplicate, invalid or incomplete entries. NightPass records presence with one scan: students who are already in scan the signed tag in their own room, and late arrivals are scanned at the gate. Every entry is verified against the student's identity (their fingerprint on their registered phone, through a passkey) and the student list, and saved with the date, time, place and result. Staff review, search and export everything from a live dashboard, follow up on anything flagged, and the warden only visits the rooms that still need a look. An emergency headcount is included as an add-on that reuses the same records.
+
+| Requirement | Where it's handled |
+| --- | --- |
+| Quick, dependable scanning | [Room check-in](#room-check-in), [the gate pass](#recording-at-the-gate-the-pass), [offline scanning](#offline-scanning-and-sync) |
+| Verify against university identity | [The four proofs](#the-four-proofs), [the fingerprint check](#the-fingerprint-check-passkeys), [gate scan rules](#gate-scan-rules) |
+| Record date, time and details | [Data model](#data-model) (`scans` keeps every attempt) |
+| Review, search and export | [Reviewing records](#reviewing-records-search-export-and-flags), [the hostel map](#the-hostel-map) |
+| Flag duplicate, invalid or incomplete entries | [Gate scan rules](#gate-scan-rules), [the four proofs](#the-four-proofs), [follow-up rounds](#follow-up-the-wardens-rounds) |
+| Security, night conditions, low delay | [Security](#security), [offline scanning](#offline-scanning-and-sync) |
 
 ## Architecture
 
@@ -87,44 +96,7 @@ sequenceDiagram
 
 In the browser demo the student's phone has no fingerprint sensor, so `src/demo/authenticator.ts` stands in for one: it shows a fingerprint prompt and answers with a software P-256 key in exactly the format a phone uses. The demo data registers that key for the demo students, so the server-side checks are the same ones a real phone goes through.
 
-## The warden's rounds
-
-`buildRounds()` in `src/lib/rounds.ts` builds tonight's list from the database each time it's asked. A student goes on the list if:
-
-| Group | Rule | Reason shown on the card |
-| --- | --- | --- |
-| Missing | No check-in of any kind tonight | "No check-in tonight", or "No check-in, and a rejected attempt tonight" |
-| Spot check | Checked in from the room, and had a refused attempt tonight | "Had a rejected attempt tonight" |
-| Spot check | Checked in from the room without a fingerprint check | "Checked in without a fingerprint check" |
-| Spot check | Checked in from the room, on a phone registered tonight | "New phone registered tonight" |
-| Spot check | Checked in from the room, and missed 2 or more of the last 6 nights | "Missed 3 of the last 6 nights" |
-| Spot check | Checked in from the room, none of the above, picked by the random sample (6%) | "Picked at random" |
-
-Students scanned at the gate by a guard, or entered by hand, were seen in person, so they are never on the list.
-
-- **The random sample is stable.** It's a hash of the student ID and the night, not a fresh dice roll, so the list doesn't reshuffle every time the phone refreshes. It changes from night to night, so students can't know in advance.
-- **Walking order.** The list is sorted by block, then by room number.
-- **One tap per door.** `recordVisit()` saves the outcome in `room_visits` (one row per student per night, so a second tap just corrects the first).
-  - **In room:** if the student had no check-in, they are now marked present ("Seen in the room during rounds").
-  - **Not in room**, for a student who had checked in from the room: the check-in is overturned. Its result becomes `absent` with the reason "Checked in from the room at 22:08, but was not there during rounds at 22:47", and it goes to **Needs review**. The student is back on the missing list.
-  - **Not in room**, for a student with no check-in: an `absent` record is added.
-
-On our sample data (150 students, about 88% in by curfew, about 62% of those using room check-in) a typical night's list is 33 to 38 rooms.
-
-## The hostel map
-
-The dashboard's **Hostel map** tab (`src/app/admin/HostelMap.tsx`) draws every block floor by floor, like the front of the building, with one square per room split between the students in it. Room numbers like `A-214` are read as block A, floor 2, room 14. Each student's part of the square is coloured by tonight's state: checked in, spot check to do, no check-in, or not in the room when visited. Tapping a room shows who lives there. The data comes from `adminOverview()` (`rooms`), built from the roster and the rounds list. During an emergency the same map switches to safe / needs help / probably inside / not checked in.
-
-## Emergency headcount
-
-`src/lib/emergency.ts`. The warden starts a headcount from the dashboard (a fire alarm, an evacuation drill, a gas leak) with one button.
-
-- **Students** see a red alert at the top of their screen, with sound and vibration, and answer **I'm safe** or **I need help** (`POST /api/student/safety`). Their screen checks for alerts every 10 seconds. A production version would add push notifications.
-- **Guards** get a **Headcount** tab, opened automatically, with a scanner for the assembly point. Scanning a student's pass marks them safe after the same signature and age checks as at the gate, so an old screenshot doesn't count. Guards can also mark someone safe by hand.
-- **The warden** sees the counts (safe, need help, not accounted for), a list of **rooms to check first**, and the hostel map in emergency colours. The list puts students who asked for help first, then students who are **not accounted for but checked in tonight**, because they are probably still in the building. Students who never checked in are probably away for the night, so they come after.
-- The latest answer wins: someone who asked for help can later be marked safe by staff. The full list downloads as a CSV for the fire marshal (`/api/admin/export?kind=headcount`), and ending the headcount writes the totals to the audit log.
-
-## The gate pass
+## Recording at the gate: the pass
 
 Students who come back late are scanned at the gate. A pass looks like this:
 
@@ -183,6 +155,56 @@ create unique index scans_one_presence on scans (roll_call_id, student_id)
 ```
 
 So a student can only be counted once per night, whichever way they were confirmed. If a second insert fails on this index, a gate scan is re-checked as a duplicate, and a room check-in simply answers "already checked in". On the phone, the check-in screen also sends only one request per tag scan, even if the camera reads the tag several times.
+
+## Reviewing records: search, export and flags
+
+The warden dashboard (`src/app/admin/`) refreshes every few seconds and has:
+
+- **Counts**: checked in, not back yet, late, needs review, rooms to visit, and how each student was confirmed (room, gate, rounds, manual).
+- **Charts**: check-ins every 15 minutes (before and after curfew) and attendance over the last seven nights.
+- **Not back yet**: students with no check-in, with their last refused attempt if any, exportable as CSV.
+- **Needs review**: every flagged entry (duplicate, expired, invalid, not on the list, refused room check-in, manual entry, late, not in room). Each is closed with a note, and who closed it is recorded.
+- **Search & export**: search by name, ID or room and filter by night, result and block. The same filters export to CSV, with a byte-order mark so Excel opens names correctly, and with cells starting with `=`, `+`, `-` or `@` escaped.
+- **Hostel map** and **Room rounds**, described below, and **Students** (CSV import, printable room tags) and **Settings** (curfew, new roll call).
+
+## Follow-up: the warden's rounds
+
+`buildRounds()` in `src/lib/rounds.ts` builds tonight's list from the database each time it's asked. A student goes on the list if:
+
+| Group | Rule | Reason shown on the card |
+| --- | --- | --- |
+| Missing | No check-in of any kind tonight | "No check-in tonight", or "No check-in, and a rejected attempt tonight" |
+| Spot check | Checked in from the room, and had a refused attempt tonight | "Had a rejected attempt tonight" |
+| Spot check | Checked in from the room without a fingerprint check | "Checked in without a fingerprint check" |
+| Spot check | Checked in from the room, on a phone registered tonight | "New phone registered tonight" |
+| Spot check | Checked in from the room, and missed 2 or more of the last 6 nights | "Missed 3 of the last 6 nights" |
+| Spot check | Checked in from the room, none of the above, picked by the random sample (6%) | "Picked at random" |
+
+Students scanned at the gate by a guard, or entered by hand, were seen in person, so they are never on the list.
+
+- **The random sample is stable.** It's a hash of the student ID and the night, not a fresh dice roll, so the list doesn't reshuffle every time the phone refreshes. It changes from night to night, so students can't know in advance.
+- **Walking order.** The list is sorted by block, then by room number.
+- **One tap per door.** `recordVisit()` saves the outcome in `room_visits` (one row per student per night, so a second tap just corrects the first).
+  - **In room:** if the student had no check-in, they are now marked present ("Seen in the room during rounds").
+  - **Not in room**, for a student who had checked in from the room: the check-in is overturned. Its result becomes `absent` with the reason "Checked in from the room at 22:08, but was not there during rounds at 22:47", and it goes to **Needs review**. The student is back on the missing list.
+  - **Not in room**, for a student with no check-in: an `absent` record is added.
+
+On our sample data (150 students, about 88% in by curfew, about 62% of those using room check-in) a typical night's list is 33 to 38 rooms.
+
+## The hostel map
+
+The dashboard's **Hostel map** tab (`src/app/admin/HostelMap.tsx`) draws every block floor by floor, like the front of the building, with one square per room split between the students in it. Room numbers like `A-214` are read as block A, floor 2, room 14. Each student's part of the square is coloured by tonight's state: checked in, spot check to do, no check-in, or not in the room when visited. Tapping a room shows who lives there. The data comes from `adminOverview()` (`rooms`), built from the roster and the rounds list. During an emergency the same map switches to safe / needs help / probably inside / not checked in.
+
+## Add-on: emergency headcount
+
+This goes beyond the problem statement. It reuses tonight's attendance records for safety.
+
+`src/lib/emergency.ts`. The warden starts a headcount from the dashboard (a fire alarm, an evacuation drill, a gas leak) with one button.
+
+- **Students** see a red alert at the top of their screen, with sound and vibration, and answer **I'm safe** or **I need help** (`POST /api/student/safety`). Their screen checks for alerts every 10 seconds. A production version would add push notifications.
+- **Guards** get a **Headcount** tab, opened automatically, with a scanner for the assembly point. Scanning a student's pass marks them safe after the same signature and age checks as at the gate, so an old screenshot doesn't count. Guards can also mark someone safe by hand.
+- **The warden** sees the counts (safe, need help, not accounted for), a list of **rooms to check first**, and the hostel map in emergency colours. The list puts students who asked for help first, then students who are **not accounted for but checked in tonight**, because they are probably still in the building. Students who never checked in are probably away for the night, so they come after.
+- The latest answer wins: someone who asked for help can later be marked safe by staff. The full list downloads as a CSV for the fire marshal (`/api/admin/export?kind=headcount`), and ending the headcount writes the totals to the audit log.
 
 ## Data model
 
@@ -358,7 +380,7 @@ The demo video was recorded from this page in presentation mode (`?present`), wh
 | --- | --- |
 | Demo accounts (`DEMO_MODE=true`) | Google sign-in with university accounts, limited to the university domain. Only `src/app/api/auth/login` needs to change. |
 | `CAMPUS_NETWORKS` left empty | The hostel Wi-Fi address ranges from campus IT |
-| Emergency alerts reach phones that have NightPass open (checked every 10 s) | Web push notifications, plus SMS for students who haven't answered |
+| Add-on: emergency alerts reach phones that have NightPass open (checked every 10 s) | Web push notifications, plus SMS for students who haven't answered |
 | Student list uploaded as CSV | Scheduled sync from the student records system |
 | PGlite or a single Postgres | Managed Postgres with backups, and a job that deletes records older than a semester |
 | Development keys | `QR_SIGNING_KEY` and `AUTH_SECRET` stored as secrets |
@@ -370,7 +392,7 @@ The demo video was recorded from this page in presentation mode (`?present`), wh
 - **Check in from the room instead of scanning everyone at a gate.** A gate scan only tells you someone entered the building, and it creates a queue at curfew. The current process checks rooms, so we kept the room as the thing being checked and removed the walking.
 - **Passkeys for the fingerprint.** Collecting fingerprints or face photos would be a privacy problem and would need special hardware. Passkeys use the sensor every phone already has, keep the biometric on the phone, and are a published standard that works on Android, iPhone and laptops.
 - **Several cheap proofs plus spot checks, instead of one strong one.** Bluetooth beacons in every room would be stronger, but they need hardware, batteries and money. A signed sticker, the phone the student already has, the Wi-Fi the hostel already has, and a few surprise visits get most of the way for the price of printing.
-- **Use the attendance data for safety.** The same records that say who is in tonight tell responders where to look first in an emergency, at no extra cost.
+- **Use the attendance data for safety (the add-on).** The same records that say who is in tonight tell responders where to look first in an emergency, at no extra cost.
 - **A web app instead of a native app.** Nothing to install from an app store, it works on any phone, and it can still be added to the home screen. The browser gives us the camera, passkeys, keeping the screen on, and vibration, which is all we need.
 - **Check on the phone first at the gate.** The guard gets a result without waiting for the network, which works with no signal. The server still has the final say.
 - **Postgres throughout.** The data is relational (students, nights, check-ins, visits, headcounts) and the warden needs filters and reports. PGlite means anyone can run the whole thing locally with one command.
