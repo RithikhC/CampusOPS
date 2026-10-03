@@ -1,0 +1,208 @@
+(globalThis.TURBOPACK||(globalThis.TURBOPACK=[])).push(["object"==typeof document?document.currentScript:void 0,76093,e=>{"use strict";var t=e.i(47167),n=e.i(14582),a=e.i(46780);let s=function(){let e=t.default.env.QR_SIGNING_KEY;if(e)return(0,a.fromHex)(e);if("false"===t.default.env.DEMO_MODE)throw Error("QR_SIGNING_KEY must be set in production");return(0,n.sha256)(new TextEncoder().encode("nightpass-development-signing-key"))}(),r={qrSigningKey:s,qrPublicKeyHex:(0,a.toHex)((0,a.publicKeyFor)(s)),demoMode:"false"!==t.default.env.DEMO_MODE,databaseUrl:t.default.env.DATABASE_URL};var i=e.i(80505),o=e.i(21795),l=e.i(6342);let d=new TextEncoder;function c(e,t,n){let s=`NR1.${(0,a.toBase64Url)(d.encode(`${e}
+${t}`))}`;return`${s}.${(0,a.toBase64Url)(l.ed25519.sign(d.encode(s),n))}`}var u=e.i(84496),m=e.i(93219);async function h(e,t,n,a){await e.query("insert into audit_log (actor, action, detail) values ($1, $2, $3)",[t.id,n,a])}async function f(e,t,n,a){let s=await e.query(`update scans set resolved_at = now(), resolved_by = $2, resolution_note = $3
+      where id = $1 and resolved_at is null and result in ('${m.FLAG_RESULTS.join("','")}')
+      returning id`,[n,t.id,a.trim()||"Reviewed"]);return s.length&&await h(e,t,"resolve_flag",`scan ${n}: ${a}`),s.length>0}async function _(e,t,n,a){let s=/^(\d{1,2}):(\d{2})$/.exec(a),r=await (0,o.getRollCall)(e,n);if(!s||!r)return null;let[i,l]=[Number(s[1]),Number(s[2])];if(i>23||l>59)return null;let d=Date.parse(r.startsAt),c=+(i<(0,u.campusHour)(d)&&i<12),m=(0,u.campusTime)(d,i,l,c);return await e.query("update roll_calls set curfew_at = $2 where id = $1",[n,new Date(m)]),await h(e,t,"set_curfew",`roll call ${n} set to ${a}`),(0,o.getRollCall)(e,n)}async function p(e,t){let n=Date.now(),a=await (0,o.getOrCreateActiveRollCall)(e,n);await e.query("update roll_calls set ends_at = $2 where id = $1",[a.id,new Date(n)]);let s=(0,o.defaultRollCallWindow)(n),r=await (0,o.insertRollCall)(e,{...s,startsAt:n},t.id);return await h(e,t,"start_roll_call",r.name),r}async function y(e,t,n){let a=(0,i.parseCsv)(n),s={added:0,updated:0,errors:[]};if(0===a.length)return{...s,errors:["The file is empty"]};let r=a[0].map(e=>e.trim().toLowerCase()),o=e=>r.indexOf(e),l=["id","name","email","hostel","room"].filter(e=>-1===o(e));if(l.length)return{...s,errors:[`Missing column(s): ${l.join(", ")}`]};for(let[t,n]of a.slice(1).entries()){let a=t+2,r=e=>-1===o(e)?"":(n[o(e)]??"").trim(),i=r("id").toUpperCase(),l=!["false","no","0","inactive"].includes(r("active").toLowerCase());if(!/^[A-Z0-9]{4,20}$/.test(i)){s.errors.push(`Line ${a}: invalid ID "${r("id")}"`);continue}if(!r("name")||!r("email").includes("@")||!r("hostel")||!r("room")){s.errors.push(`Line ${a}: name, email, hostel and room are required`);continue}try{let[t]=await e.query(`insert into students (id, name, email, hostel, room, active) values ($1, $2, $3, $4, $5, $6)
+         on conflict (id) do update set name = excluded.name, email = excluded.email,
+           hostel = excluded.hostel, room = excluded.room, active = excluded.active
+         returning (xmax = 0) as inserted`,[i,r("name"),r("email").toLowerCase(),r("hostel"),r("room"),l]);t.inserted?s.added++:s.updated++}catch(e){s.errors.push(`Line ${a}: ${e.message}`)}}return await h(e,t,"import_roster",`${s.added} added, ${s.updated} updated, ${s.errors.length} errors`),s}async function w(e){return(await e.query("select distinct hostel, room from students where active order by hostel, room")).map(e=>({...e,code:c(e.hostel,e.room,r.qrSigningKey)}))}let g=`('${m.PRESENT_RESULTS.join("','")}')`,$=(0,a.fromHex)(r.qrPublicKeyHex),v=new Intl.Collator("en",{numeric:!0});function k(e){return{id:e.id,reason:e.reason,startedAt:new Date(e.started_at).toISOString(),startedBy:e.started_by,endedAt:e.ended_at?new Date(e.ended_at).toISOString():null}}let b=`select e.id, e.reason, e.started_at, coalesce(sf.name, e.started_by) as started_by, e.ended_at
+                            from emergencies e left join staff sf on sf.id = e.started_by`;async function x(e){let[t]=await e.query(`${b} where e.ended_at is null order by e.started_at desc limit 1`);return t?k(t):null}async function S(e,t,n,a=Date.now()){let s=await x(e);return s||(await e.query("insert into emergencies (reason, started_at, started_by) values ($1, $2, $3)",[n.trim().slice(0,120)||"Emergency headcount",new Date(a),t.id]),await e.query("insert into audit_log (actor, action, detail) values ($1, 'start_emergency', $2)",[t.id,n]),await x(e))}async function I(e,t,n=Date.now()){let a=await x(e);if(!a)return!1;let s=await A(e,a.id);return await e.query("update emergencies set ended_at = $2, ended_by = $3 where id = $1",[a.id,new Date(n),t.id]),await e.query("insert into audit_log (actor, action, detail) values ($1, 'end_emergency', $2)",[t.id,`${a.reason}: ${s?.summary.safe??0} safe, ${s?.summary.help??0} needed help, ${s?.summary.unaccounted??0} unaccounted`]),!0}async function q(e,t,n,a,s,r,i=Date.now()){let[o]=await e.query("select 1 from students where id = $1 and active",[n]);return!!o&&(await e.query(`insert into emergency_responses (emergency_id, student_id, status, method, recorded_by, at) values ($1, $2, $3, $4, $5, $6)
+     on conflict (emergency_id, student_id) do update
+       set status = excluded.status, method = excluded.method, recorded_by = excluded.recorded_by, at = excluded.at`,[t,n,a,s,r,new Date(i)]),!0)}async function D(e,t,n,s=Date.now()){let r=await x(e);if(!r)return{ok:!1,student:null,message:"There is no headcount running."};let i=(0,a.parsePass)(n);if(!i||!(0,a.hasValidSignature)(i,$))return{ok:!1,student:null,message:"Not a NightPass pass."};if((0,a.periodAt)(s)-i.period>a.MAX_AGE_PERIODS)return{ok:!1,student:null,message:"Old code, probably a screenshot. Ask for the live pass."};let[o]=await e.query("select id, name, hostel, room from students where id = $1 and active",[i.studentId]);return o?(await q(e,r.id,o.id,"safe","scan",t.id,s),{ok:!0,student:o,message:`Safe at ${(0,u.formatClock)(s)}`}):{ok:!1,student:null,message:"Not on the student list."}}async function A(e,t){let n=t?await e.query(`${b} where e.id = $1`,[t]).then(([e])=>e?k(e):null):await x(e);if(!n)return null;let a=await (0,o.findActiveRollCall)(e,Date.parse(n.startedAt)),s=(await e.query(`select st.id, st.name, st.hostel, st.room,
+            exists (select 1 from scans p where p.roll_call_id = $2 and p.student_id = st.id and p.result in ${g}) as checked_in,
+            r.status, r.method, r.at, coalesce(sf.name, case when r.method = 'self' then 'Student' end) as by
+       from students st
+       left join emergency_responses r on r.emergency_id = $1 and r.student_id = st.id
+       left join staff sf on sf.id = r.recorded_by
+      where st.active`,[n.id,a?.id??-1])).map(e=>({student:{id:e.id,name:e.name,hostel:e.hostel,room:e.room},status:e.status??"unaccounted",likelyInside:e.checked_in,at:e.at?new Date(e.at).toISOString():null,method:e.method,by:e.by})),r=e=>"help"===e.status?0:"unaccounted"===e.status?e.likelyInside?1:2:3;return s.sort((e,t)=>r(e)-r(t)||v.compare(e.student.hostel,t.student.hostel)||v.compare(e.student.room,t.student.room)),{emergency:n,summary:{students:s.length,safe:s.filter(e=>"safe"===e.status).length,help:s.filter(e=>"help"===e.status).length,unaccounted:s.filter(e=>"unaccounted"===e.status).length,likelyInside:s.filter(e=>"unaccounted"===e.status&&e.likelyInside).length},people:s}}async function C(e,t,n){if("start"===n.action||"end"===n.action)return"admin"!==t.role?{status:403,body:{error:"Only the warden can start or end a headcount"}}:("start"===n.action?await S(e,t,String(n.reason??"")):await I(e,t),{status:200,body:await A(e)??{emergency:null}});if("scan"===n.action)return{status:200,body:{scan:await D(e,t,String(n.code??"").slice(0,300)),headcount:await A(e)}};if("mark"===n.action){let a=await x(e);return a?"safe"!==n.status&&"help"!==n.status?{status:400,body:{error:"Choose safe or help"}}:await q(e,a.id,String(n.studentId??""),n.status,"staff",t.id)?{status:200,body:await A(e)}:{status:404,body:{error:"Student not found"}}:{status:409,body:{error:"There is no headcount running"}}}return{status:400,body:{error:"Unknown action"}}}let R={safe:"Safe",help:"Needs help",unaccounted:"Not accounted for"},T={self:"Own phone",scan:"Pass scanned",staff:"Marked by staff"},N=`
+create table if not exists students (
+  id          text primary key,              -- university ID, e.g. 2024A7PS0112U
+  name        text not null,
+  email       text not null unique,
+  hostel      text not null,
+  room        text not null,
+  active      boolean not null default true, -- inactive = graduated / withdrawn; their passes stop working
+  created_at  timestamptz not null default now()
+);
+
+create table if not exists staff (
+  id     text primary key,
+  name   text not null,
+  email  text not null unique,
+  role   text not null check (role in ('guard', 'admin')),
+  title  text not null default ''
+);
+
+create table if not exists checkpoints (
+  id      text primary key,
+  name    text not null,
+  hostel  text
+);
+
+-- One row per night. Scans belong to the roll call that was active when they happened.
+create table if not exists roll_calls (
+  id          integer generated always as identity primary key,
+  name        text not null,
+  starts_at   timestamptz not null,
+  ends_at     timestamptz not null,
+  curfew_at   timestamptz not null,
+  created_by  text,
+  created_at  timestamptz not null default now()
+);
+
+-- Every scan attempt is kept, including rejected ones: that is the audit trail.
+create table if not exists scans (
+  id               integer generated always as identity primary key,
+  client_id        text not null unique,        -- generated on the scanner; makes offline sync idempotent
+  roll_call_id     integer not null references roll_calls(id) on delete cascade,
+  student_id       text references students(id) on delete set null,
+  claimed_id       text,                        -- ID read from the code, kept even if not on the roster
+  checkpoint_id    text references checkpoints(id),
+  scanned_by       text not null,
+  method           text not null check (method in ('qr', 'manual', 'self', 'round')),
+  result           text not null check (result in ('valid', 'late', 'manual', 'duplicate', 'expired', 'invalid', 'unknown', 'absent')),
+  reason           text not null,
+  scanned_at       timestamptz not null,        -- when the guard scanned (device time)
+  received_at      timestamptz not null default now(),
+  offline          boolean not null default false,
+  resolved_at      timestamptz,
+  resolved_by      text,
+  resolution_note  text,
+  device_id        text,                        -- phone used for a room check-in
+  user_verified    boolean                      -- room check-in confirmed with fingerprint / face
+);
+
+-- Upgrades for databases created before room check-ins and rounds existed.
+alter table scans add column if not exists device_id text;
+alter table scans add column if not exists user_verified boolean;
+alter table scans drop constraint if exists scans_method_check;
+alter table scans add constraint scans_method_check check (method in ('qr', 'manual', 'self', 'round'));
+alter table scans drop constraint if exists scans_result_check;
+alter table scans add constraint scans_result_check
+  check (result in ('valid', 'late', 'manual', 'duplicate', 'expired', 'invalid', 'unknown', 'absent'));
+
+-- The one phone each student may check in from. Registered on first use; the hostel office can reset it.
+create table if not exists student_devices (
+  student_id     text primary key references students(id) on delete cascade,
+  device_id      text not null,
+  registered_at  timestamptz not null default now(),
+  credential_id  text,                          -- passkey on that phone (fingerprint / face unlock)
+  public_key     text                           -- its public key; the private key never leaves the phone
+);
+alter table student_devices add column if not exists credential_id text;
+alter table student_devices add column if not exists public_key text;
+
+-- What the warden found at the door during rounds: one row per student per night.
+create table if not exists room_visits (
+  roll_call_id  integer not null references roll_calls(id) on delete cascade,
+  student_id    text not null references students(id) on delete cascade,
+  outcome       text not null check (outcome in ('present', 'absent')),
+  visited_by    text not null,
+  visited_at    timestamptz not null,
+  primary key (roll_call_id, student_id)
+);
+
+-- A student can be marked present at most once per roll call, even if two gates scan at the same instant.
+create unique index if not exists scans_one_presence
+  on scans (roll_call_id, student_id) where result in ('valid', 'late', 'manual');
+create index if not exists scans_by_roll_call on scans (roll_call_id, scanned_at desc);
+create index if not exists scans_by_student on scans (student_id, roll_call_id);
+
+-- Emergency headcount (fire alarm, evacuation): who is safe, who needs help, who is unaccounted for.
+create table if not exists emergencies (
+  id          integer generated always as identity primary key,
+  reason      text not null,
+  started_at  timestamptz not null,
+  started_by  text not null,
+  ended_at    timestamptz,
+  ended_by    text
+);
+
+create table if not exists emergency_responses (
+  emergency_id  integer not null references emergencies(id) on delete cascade,
+  student_id    text not null references students(id) on delete cascade,
+  status        text not null check (status in ('safe', 'help')),
+  method        text not null check (method in ('self', 'scan', 'staff')),
+  recorded_by   text not null,
+  at            timestamptz not null,
+  primary key (emergency_id, student_id)
+);
+
+create table if not exists audit_log (
+  id      integer generated always as identity primary key,
+  at      timestamptz not null default now(),
+  actor   text not null,
+  action  text not null,
+  detail  text not null default ''
+);
+`;var E=e.i(74098);async function P(e,t={}){await e.exec(N);let[{count:n}]=await e.query("select count(*)::int as count from students");0===n&&await (0,E.seedDemoData)(e,Date.now(),t)}function O(e){return"object"==typeof e&&null!==e&&"23505"===e.code}var j=e.i(9526);let U=(0,a.fromHex)(r.qrPublicKeyHex),M=`('${m.PRESENT_RESULTS.join("','")}')`;function L(e){return Math.max(Date.parse(e.startsAt),Date.parse(e.curfewAt)-54e5)}async function K(e,t,n,s=Date.now()){let[r]=await e.query("select id, hostel, room from students where id = $1 and active",[t]);if(!r)return{ok:!1,result:"unknown",message:"Your account is not on the active student list."};let i=await (0,o.getOrCreateActiveRollCall)(e,s),c=L(i);if(s<c)return{ok:!1,result:"closed",message:`Room check-in opens at ${(0,u.formatClock)(c)}.`};let m=async()=>(await e.query(`select 1 from scans where roll_call_id = $1 and student_id = $2 and result in ${M} limit 1`,[i.id,t])).length>0;if(await m())return{ok:!0,result:"already",message:"You're already checked in for tonight."};let h=(a,r,o=null)=>e.query(`insert into scans (client_id, roll_call_id, student_id, claimed_id, scanned_by, method, result, reason, scanned_at, device_id, user_verified)
+       values ($1, $2, $3, $3, 'student', 'self', $4, $5, $6, $7, $8)`,[crypto.randomUUID(),i.id,t,a,r,new Date(s),n.deviceId.slice(0,64),o]),f=async(e,t)=>(await h("invalid",e),{ok:!1,result:"invalid",message:t}),[_]=await e.query("select device_id, credential_id, public_key from student_devices where student_id = $1",[t]);if(_&&_.device_id!==n.deviceId)return f("Room check-in tried from a phone that isn't registered to this student","This isn't the phone registered to your account. Ask the hostel office to register your new phone.");if(!n.onCampus)return f("Room check-in tried from outside the hostel network","Connect to the hostel Wi-Fi to check in from your room.");let p=function(e,t){let n=e.trim().split(".");if(3!==n.length||"NR1"!==n[0])return null;try{let e=(0,a.fromBase64Url)(n[2]);if(64!==e.length||!l.ed25519.verify(e,d.encode(`${n[0]}.${n[1]}`),t))return null;let[s,r,...i]=new TextDecoder().decode((0,a.fromBase64Url)(n[1])).split("\n");if(!s||!r||i.length)return null;return{hostel:s,room:r}}catch{return null}}(n.tag,U);if(!p)return f("Room check-in with something that isn't a NightPass room tag","That isn't a NightPass room tag. Scan the tag inside your room.");if(p.hostel!==r.hostel||p.room!==r.room)return f(`Scanned the tag for room ${p.room}, but is assigned to room ${r.room}`,`That tag is for room ${p.room}. Scan the tag in your own room (${r.room}).`);let y=null;if(n.passkeyFailed)return f("Fingerprint or face check failed on the student's phone","Your fingerprint or face wasn't confirmed, so you're not checked in. Only you can check yourself in.");if(n.passkey){if(!n.challenge||!(0,j.checkChallenge)(n.challenge,t,s,U))return f("Fingerprint check took too long or was reused","That took too long. Try again.");if("get"===n.passkey.kind&&n.passkey.credentialId!==_?.credential_id)return f("Fingerprint check from a phone that isn't registered to this student","This isn't the phone registered to your account. Ask the hostel office to register your new phone.");if("create"===n.passkey.kind&&_?.credential_id)return f("Tried to set up a second fingerprint check for this student","Your phone is already set up. If you reset it, ask the hostel office to register it again.");let e=(0,j.verifyPasskey)(n.passkey,{challenge:n.challenge,origin:n.site?.origin??"",rpId:n.site?.rpId??"",publicKey:_?.public_key});if(!e.ok)return f(`Fingerprint check failed: ${e.reason}`,"Your fingerprint or face couldn't be confirmed. Try again.");y={credentialId:n.passkey.credentialId,publicKey:e.publicKey}}else if(_?.credential_id)return f("Room check-in without the fingerprint check this phone is set up for","Confirm with your fingerprint or face to check in.");_?y&&!_.credential_id&&await e.query("update student_devices set credential_id = $2, public_key = $3 where student_id = $1",[t,y.credentialId,y.publicKey]):await e.query(`insert into student_devices (student_id, device_id, registered_at, credential_id, public_key) values ($1, $2, $3, $4, $5)
+       on conflict (student_id) do nothing`,[t,n.deviceId.slice(0,64),new Date(s),y?.credentialId??null,y?.publicKey??null]);let w=Date.parse(i.curfewAt),g=s>w;try{let e=y?"":", without a fingerprint check";await h(g?"late":"valid",g?`Room check-in ${Math.ceil((s-w)/6e4)} min after curfew${e}`:`Checked in from room ${r.room}${e}`,!!y)}catch(e){if(O(e))return{ok:!0,result:"already",message:"You're already checked in for tonight."};throw e}return{ok:!0,result:g?"late":"valid",message:g?"Checked in, but after curfew. The warden will see it as late.":"You're checked in for tonight."}}let H=`('${m.PRESENT_RESULTS.join("','")}')`,F=new Intl.Collator("en",{numeric:!0});async function z(e,t,n=Date.now()){let a=t?await (0,o.getRollCall)(e,t):await (0,o.getOrCreateActiveRollCall)(e,n);if(!a)return null;let s=new Date(Date.parse(a.startsAt)),r=await e.query(`select st.id, st.name, st.hostel, st.room,
+            p.method as presence_method, p.scanned_at as presence_at, p.user_verified as presence_verified,
+            (select count(*)::int from scans r
+              where r.roll_call_id = $1 and r.student_id = st.id and r.result in ('invalid', 'expired')) as rejected,
+            d.registered_at as device_at,
+            (select count(*)::int from roll_calls rc
+              where rc.id <> $1 and rc.starts_at < $2 and rc.starts_at > $2::timestamptz - interval '7 days'
+                and not exists (select 1 from scans s
+                                 where s.roll_call_id = rc.id and s.student_id = st.id and s.result in ${H})) as missed,
+            v.outcome, v.visited_at, vs.name as visited_by
+       from students st
+       left join scans p on p.roll_call_id = $1 and p.student_id = st.id and p.result in ${H}
+       left join student_devices d on d.student_id = st.id
+       left join room_visits v on v.roll_call_id = $1 and v.student_id = st.id
+       left join staff vs on vs.id = v.visited_by
+      where st.active`,[a.id,s]),i=[];for(let e of r){let t={id:e.id,name:e.name,hostel:e.hostel,room:e.room},n=e.outcome?{outcome:e.outcome,at:new Date(e.visited_at).toISOString(),by:e.visited_by}:null,r=e.presence_at?new Date(e.presence_at).toISOString():null;if(!e.presence_method){let a=n?.outcome==="absent"?"Not in the room when visited":e.rejected>0?"No check-in, and a rejected attempt tonight":"No check-in tonight";i.push({student:t,kind:"missing",reasons:[a],checkedInAt:null,visit:n});continue}if("self"!==e.presence_method){n&&i.push({student:t,kind:"missing",reasons:["Had no check-in until the visit"],checkedInAt:r,visit:n});continue}let o=[];e.rejected>0&&o.push("Had a rejected attempt tonight"),!1===e.presence_verified&&o.push("Checked in without a fingerprint check"),e.device_at&&new Date(e.device_at)>=s&&o.push("New phone registered tonight"),e.missed>=2&&o.push(`Missed ${e.missed} of the last 6 nights`),0===o.length&&function(e,t){let n=0x811c9dc5;for(let a of`${e}:${t}`)n=Math.imul(n^a.charCodeAt(0),0x1000193)>>>0;return n%100<6}(e.id,a.id)&&o.push("Picked at random"),(o.length>0||n)&&i.push({student:t,kind:"spot",reasons:o.length?o:["Spot check"],checkedInAt:r,visit:n})}i.sort((e,t)=>F.compare(e.student.hostel,t.student.hostel)||F.compare(e.student.room,t.student.room));let l=r.filter(e=>e.presence_method).length,d=i.filter(e=>"missing"===e.kind&&!(e.visit&&e.checkedInAt)).length,c=i.filter(e=>"spot"===e.kind).length;return{rollCall:a,curfewPassed:n>Date.parse(a.curfewAt),items:i,summary:{students:r.length,checkedIn:l,toVisit:i.length,visited:i.filter(e=>e.visit).length,missing:d,spotChecks:c,noVisitNeeded:r.length-i.length}}}async function B(e,t,n,a,s=Date.now()){let r=await (0,o.getOrCreateActiveRollCall)(e,s),[i]=await e.query("select id from students where id = $1 and active",[n]);if(!i)return!1;let l=new Date(s);await e.query(`insert into room_visits (roll_call_id, student_id, outcome, visited_by, visited_at) values ($1, $2, $3, $4, $5)
+     on conflict (roll_call_id, student_id) do update set outcome = excluded.outcome, visited_by = excluded.visited_by, visited_at = excluded.visited_at`,[r.id,n,a,t.id,l]);let[d]=await e.query(`select id, method, scanned_at from scans where roll_call_id = $1 and student_id = $2 and result in ${H} limit 1`,[r.id,n]);if("present"===a)return await e.query(`update scans set resolved_at = $3, resolved_by = $4, resolution_note = 'Later seen in the room'
+        where roll_call_id = $1 and student_id = $2 and result = 'absent' and resolved_at is null`,[r.id,n,l,t.id]),d||await e.query(`insert into scans (client_id, roll_call_id, student_id, claimed_id, scanned_by, method, result, reason, scanned_at)
+         values ($1, $2, $3, $3, $4, 'round', 'valid', 'Seen in the room during rounds', $5)
+         on conflict do nothing`,[crypto.randomUUID(),r.id,n,t.id,l]),!0;if(d?.method==="self")await e.query(`update scans set result = 'absent', scanned_by = $2,
+              reason = $3, resolved_at = null, resolved_by = null, resolution_note = null
+        where id = $1`,[d.id,t.id,`Checked in from the room at ${(0,u.formatClock)(d.scanned_at)}, but was not there during rounds at ${(0,u.formatClock)(s)}`]);else if(!d){let[a]=await e.query("select 1 from scans where roll_call_id = $1 and student_id = $2 and result = 'absent' and resolved_at is null limit 1",[r.id,n]);a||await e.query(`insert into scans (client_id, roll_call_id, student_id, claimed_id, scanned_by, method, result, reason, scanned_at)
+         values ($1, $2, $3, $3, $4, 'round', 'absent', $5, $6)`,[crypto.randomUUID(),r.id,n,t.id,`Not in the room during rounds at ${(0,u.formatClock)(s)}`,l])}return!0}let G=`('${m.PRESENT_RESULTS.join("','")}')`,Y=`('${m.FLAG_RESULTS.join("','")}')`,W=new Map,V=e=>e?new Date(e).toISOString():null,J="coalesce(c.name, case s.method when 'self' then 'Room check-in' when 'round' then 'Warden''s rounds' end)";async function Q(e,t){let n=Date.now(),[s]=await e.query("select id, name, email, hostel, room from students where id = $1 and active",[t]);if(!s)return null;let i=await (0,o.getOrCreateActiveRollCall)(e,n),[l]=await e.query(`select s.result, s.scanned_at, c.name as checkpoint, s.method
+       from scans s left join checkpoints c on c.id = s.checkpoint_id
+      where s.roll_call_id = $1 and s.student_id = $2 and s.result in ${G}
+      limit 1`,[i.id,t]),[d]=await e.query("select credential_id from student_devices where student_id = $1",[t]),c=await x(e),[u]=c?await e.query("select status, at from emergency_responses where emergency_id = $1 and student_id = $2",[c.id,t]):[],m=await e.query(`select rc.name, rc.starts_at, s.result, s.scanned_at
+       from roll_calls rc
+       left join scans s on s.roll_call_id = rc.id and s.student_id = $1 and s.result in ${G}
+      where rc.id <> $2 and rc.starts_at < $3
+      order by rc.starts_at desc limit 6`,[t,i.id,new Date(n)]),h=(0,a.periodAt)(n)-1,f=Array.from({length:1200/a.PERIOD_SECONDS},(e,n)=>{var s;let i,o;return{period:h+n,code:(s=h+n,i=`${t}.${s}`,(o=W.get(i))||(o=(0,a.signPass)(t,s,r.qrSigningKey),W.size>2e4&&W.clear(),W.set(i,o)),o)}});return{student:s,rollCall:i,status:l?{result:l.result,at:V(l.scanned_at),checkpoint:l.checkpoint,method:l.method}:null,roomCheckIn:{opensAt:new Date(L(i)).toISOString(),open:n>=L(i),challenge:(0,j.issueChallenge)(t,n,r.qrSigningKey),credentialId:d?.credential_id??null},emergency:c&&{id:c.id,reason:c.reason,startedAt:c.startedAt,mine:u?{status:u.status,at:V(u.at)}:null},codes:f,periodSeconds:a.PERIOD_SECONDS,serverNow:n,history:m.map(e=>({name:e.name,startsAt:V(e.starts_at),result:e.result,at:V(e.scanned_at)}))}}async function X(e){let t=Date.now(),n=await (0,o.getOrCreateActiveRollCall)(e,t),[a,s,i,[{count:l}],d]=await Promise.all([e.query("select id, name from checkpoints order by hostel nulls last, name"),e.query("select id, name, hostel, room from students where active order by name"),e.query(`select s.student_id, s.scanned_at, ${J} as checkpoint
+         from scans s left join checkpoints c on c.id = s.checkpoint_id
+        where s.roll_call_id = $1 and s.result in ${G}`,[n.id]),e.query(`select count(*)::int as count from scans where roll_call_id = $1 and result in ${Y} and resolved_at is null`,[n.id]),x(e)]);return{rollCall:n,checkpoints:a,roster:s,present:i.map(e=>({studentId:e.student_id,at:V(e.scanned_at),checkpoint:e.checkpoint??"another gate"})),publicKeyHex:r.qrPublicKeyHex,serverNow:t,flagsOpen:l,emergency:d}}let Z=`
+  select s.id, s.scanned_at, s.received_at, s.result, s.reason, s.method, s.offline, s.student_id, s.claimed_id,
+         st.name as student_name, st.hostel, st.room, ${J} as checkpoint, sf.name as scanned_by,
+         rc.name as roll_call, s.resolved_at, rs.name as resolved_by, s.resolution_note
+    from scans s
+    join roll_calls rc on rc.id = s.roll_call_id
+    left join students st on st.id = s.student_id
+    left join checkpoints c on c.id = s.checkpoint_id
+    left join staff sf on sf.id = s.scanned_by
+    left join staff rs on rs.id = s.resolved_by`;function ee(e){return{id:e.id,scannedAt:V(e.scanned_at),receivedAt:V(e.received_at),result:e.result,reason:e.reason,method:e.method,offline:e.offline,studentId:e.student_id,claimedId:e.claimed_id,studentName:e.student_name,hostel:e.hostel,room:e.room,checkpoint:e.checkpoint,scannedBy:e.scanned_by,rollCall:e.roll_call,resolvedAt:V(e.resolved_at),resolvedBy:e.resolved_by,resolutionNote:e.resolution_note}}async function et(e,t){let n=Date.now(),a=t?await (0,o.getRollCall)(e,t):await (0,o.getOrCreateActiveRollCall)(e,n);if(!a)return null;let[s,r,i,l,d,c,u,h,f,_,p,y]=await Promise.all([(0,o.listRollCalls)(e),e.query(`select st.hostel, count(*)::int as expected, count(p.student_id)::int as present
+         from students st
+         left join scans p on p.student_id = st.id and p.roll_call_id = $1 and p.result in ${G}
+        where st.active
+        group by st.hostel order by st.hostel`,[a.id]),e.query(`select result, count(*)::int as total, count(*) filter (where resolved_at is null)::int as open
+         from scans where roll_call_id = $1 group by result`,[a.id]),e.query(`select scanned_at from scans where roll_call_id = $1 and result in ${G} order by scanned_at`,[a.id]),e.query(`select rc.id, rc.name, rc.starts_at,
+              count(s.id) filter (where s.result in ${G})::int as present,
+              count(s.id) filter (where s.result = 'late')::int as late
+         from roll_calls rc left join scans s on s.roll_call_id = rc.id
+        where rc.starts_at <= $1
+        group by rc.id order by rc.starts_at desc limit 7`,[new Date(Date.parse(a.startsAt))]),e.query(`${Z} where s.roll_call_id = $1 order by s.scanned_at desc limit 40`,[a.id]),e.query(`${Z} where s.roll_call_id = $1 and s.result in ${Y} and s.resolved_at is null
+       order by s.scanned_at desc limit 100`,[a.id]),e.query(`select st.id, st.name, st.email, st.hostel, st.room,
+              a.result as attempt_result, a.scanned_at as attempt_at, a.reason as attempt_reason
+         from students st
+         left join lateral (
+           select result, scanned_at, reason from scans
+            where roll_call_id = $1 and student_id = st.id order by scanned_at desc limit 1
+         ) a on true
+        where st.active and not exists (
+          select 1 from scans p where p.roll_call_id = $1 and p.student_id = st.id and p.result in ${G}
+        )
+        order by (a.result is null), st.hostel, st.name`,[a.id]),e.query(`select method, count(*)::int as count from scans where roll_call_id = $1 and result in ${G} group by method`,[a.id]),z(e,a.id,n),e.query("select id, name, hostel, room from students where active order by hostel, room, name"),A(e)]),w=e=>i.find(t=>t.result===e),g=r.reduce((e,t)=>e+t.expected,0),$=r.reduce((e,t)=>e+t.present,0);return{rollCall:a,rollCalls:s,isLive:Date.parse(a.startsAt)<=n&&Date.parse(a.endsAt)>n,stats:{expected:g,present:$,missing:g-$,late:w("late")?.total??0,manual:w("manual")?.total??0,flagsOpen:i.filter(e=>m.FLAG_RESULTS.includes(e.result)).reduce((e,t)=>e+t.open,0),rejected:i.filter(e=>!m.PRESENT_RESULTS.includes(e.result)).reduce((e,t)=>e+t.total,0)},verifiedBy:{self:f.find(e=>"self"===e.method)?.count??0,qr:f.find(e=>"qr"===e.method)?.count??0,round:f.find(e=>"round"===e.method)?.count??0,manual:f.find(e=>"manual"===e.method)?.count??0},rounds:_,rooms:function(e,t){let n=new Map(t.items.map(e=>[e.student.id,e])),a=new Map;for(let t of e){let e=n.get(t.id),s=e?e.visit?"present"===e.visit.outcome?"in":"absent":"spot"===e.kind?"check":"missing":"in",r=`${t.hostel}|${t.room}`;a.has(r)||a.set(r,{hostel:t.hostel,room:t.room,students:[]}),a.get(r).students.push({id:t.id,name:t.name,state:s})}return[...a.values()]}(p,_),emergency:y,byHostel:r,arrivals:function(e){if(0===e.length)return[];let t=9e5*Math.floor(e[0]/9e5),n=9e5*Math.floor(e[e.length-1]/9e5),a=new Map;for(let e=t;e<=n;e+=9e5)a.set(e,0);for(let t of e){let e=9e5*Math.floor(t/9e5);a.set(e,(a.get(e)??0)+1)}return[...a].map(([e,t])=>({at:new Date(e).toISOString(),count:t}))}(l.map(e=>new Date(e.scanned_at).getTime())),trend:d.reverse().map(e=>({id:e.id,name:e.name,startsAt:V(e.starts_at),present:e.present,late:e.late})),feed:c.map(ee),flags:u.map(ee),missing:h.map(e=>({id:e.id,name:e.name,email:e.email,hostel:e.hostel,room:e.room,lastAttempt:e.attempt_result?{result:e.attempt_result,at:V(e.attempt_at),reason:e.attempt_reason??""}:null}))}}function en(e){let t=Number(e.get("rollCallId"));return{q:e.get("q")??void 0,result:e.get("result")??void 0,hostel:e.get("hostel")??void 0,rollCallId:Number.isInteger(t)&&t>0?t:void 0,from:e.get("from")??void 0,to:e.get("to")??void 0}}async function ea(e,t){let n=[],a=[],s=(e,t)=>{a.push(t),n.push(e(`$${a.length}`))};return t.q?.trim()&&s(e=>`(st.name ilike ${e} or s.student_id ilike ${e} or s.claimed_id ilike ${e} or st.room ilike ${e})`,`%${t.q.trim()}%`),"present"===t.result?n.push(`s.result in ${G}`):"flagged"===t.result?n.push(`s.result in ${Y}`):"open"===t.result?n.push(`s.result in ${Y} and s.resolved_at is null`):t.result&&s(e=>`s.result = ${e}`,t.result),t.hostel&&s(e=>`st.hostel = ${e}`,t.hostel),t.rollCallId&&s(e=>`s.roll_call_id = ${e}`,t.rollCallId),t.from&&!Number.isNaN(Date.parse(t.from))&&s(e=>`s.scanned_at >= ${e}`,new Date(t.from)),t.to&&!Number.isNaN(Date.parse(t.to))&&s(e=>`s.scanned_at < ${e}`,new Date(t.to)),a.push(Math.min(t.limit??300,1e4)),(await e.query(`${Z} ${n.length?`where ${n.join(" and ")}`:""}
+     order by s.scanned_at desc limit $${a.length}`,a)).map(ee)}let es=(0,a.fromHex)(r.qrPublicKeyHex),er=`('${m.PRESENT_RESULTS.join("','")}')`;async function ei(e,t){let[n]=await e.query("select id, name, hostel, room from students where id = $1 and active",[t]);return n}async function eo(e,t,n){let[a]=await e.query(`select s.scanned_at, coalesce(c.name, case s.method when 'self' then 'room check-in' when 'round' then 'warden''s rounds' end) as checkpoint
+       from scans s left join checkpoints c on c.id = s.checkpoint_id
+      where s.roll_call_id = $1 and s.student_id = $2 and s.result in ${er}
+      limit 1`,[t,n]);return a?{atMs:new Date(a.scanned_at).getTime(),checkpoint:a.checkpoint??"another gate"}:void 0}async function el(e,t){let[n]=await e.query(`select s.result, s.reason, s.claimed_id, s.scanned_at, st.id, st.name, st.hostel, st.room
+       from scans s left join students st on st.id = s.student_id
+      where s.client_id = $1`,[t]);return n?{clientId:t,result:n.result,reason:n.reason,claimedId:n.claimed_id,student:n.id?{id:n.id,name:n.name,hostel:n.hostel,room:n.room}:null,scannedAt:new Date(n.scanned_at).toISOString()}:null}async function ed(e,t,n,s,r){let i="qr"===t.method?(0,a.parsePass)(t.raw??"")?.studentId:t.studentId,o=i?await ei(e,i):void 0,l=i?await eo(e,n,i):void 0,d={nowMs:r,publicKey:es,curfewAtMs:s,findStudent:e=>e===i?o:void 0,findPresence:e=>e===i?l:void 0};return"qr"===t.method?(0,m.verifyPass)(t.raw??"",d):(0,m.verifyManual)(t.studentId??"",t.note??"",d)}async function ec(e,t,n){let a=Date.now(),s=await (0,o.getOrCreateActiveRollCall)(e,a),r=Date.parse(s.curfewAt),i=new Set((await e.query("select id from checkpoints")).map(e=>e.id)),l=[];for(let o of n){let n=await el(e,o.clientId);if(n){l.push(n);continue}let d=Math.min(Math.max(o.scannedAt,a-864e5),a),c=i.has(o.checkpointId)?o.checkpointId:null;for(let n=0;n<2;n++){let a=await ed(e,o,s.id,r,d);try{await e.query(`insert into scans (client_id, roll_call_id, student_id, claimed_id, checkpoint_id, scanned_by,
+                              method, result, reason, scanned_at, offline)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,[o.clientId,s.id,a.student?.id??null,a.claimedId,c,t.id,o.method,a.result,a.reason,new Date(d),o.offline]),l.push({clientId:o.clientId,result:a.result,reason:a.reason,claimedId:a.claimedId,student:a.student,scannedAt:new Date(d).toISOString()});break}catch(a){if(!O(a)||1===n)throw a;let t=await el(e,o.clientId);if(t){l.push(t);break}}}}return l}let eu={curfewInMinutes:25,registerDemoPhones:!0},em=Function("url","return import(url)");async function eh(){let{PGlite:e}=await em("https://cdn.jsdelivr.net/npm/@electric-sql/pglite@0.5.8/dist/index.js");return e.create()}async function ef(){let e=await eh(),t={query:async(t,n=[])=>(await e.query(t,n)).rows,async exec(t){await e.exec(t)}};return await P(t,eu),{handle:(e,n,a,s)=>ey(t,e,n,a,s).catch(e=>e_(500,{error:e.message})),passCode:(e,t=0)=>(0,a.signPass)(e,(0,a.periodAt)(Date.now())-t,r.qrSigningKey),roomTag:async e=>{let[n]=await t.query("select hostel, room from students where id = $1",[e]);return c(n.hostel,n.room,r.qrSigningKey)},roomTagFor:(e,t)=>c(e,t,r.qrSigningKey),reset:()=>(0,E.resetDemoData)(t,eu)}}function e_(e,t){return{status:e,contentType:"application/json",body:JSON.stringify(t)}}function ep(e,t){return t.includes(e.role)}async function ey(e,t,n,a,s){let r=new URL(a,"https://demo.local"),o=r.pathname.replace(/\/+$/,""),l=s?JSON.parse(s):{},d=e_(403,{error:"Not allowed for your role"});if("/api/auth/logout"===o||"/api/auth/login"===o)return e_(200,{redirect:"/"});if("/api/student/pass"===o&&"GET"===n){if(!ep(t,["student"]))return d;let n=await Q(e,t.id);return n?e_(200,n):e_(404,{error:"Your pass is not active"})}if("/api/student/checkin"===o&&"POST"===n)return ep(t,["student"])?e_(200,await K(e,t.id,{tag:String(l.tag??""),deviceId:String(l.deviceId??""),onCampus:!l.simulateOffCampus,challenge:"string"==typeof l.challenge?l.challenge:void 0,passkey:(0,j.parsePasskeyProof)(l.passkey),passkeyFailed:!0===l.passkeyFailed,site:{origin:window.location.origin,rpId:window.location.hostname}})):d;if("/api/student/safety"===o&&"POST"===n){if(!ep(t,["student"]))return d;let n=await x(e);return n?"safe"!==l.status&&"help"!==l.status?e_(400,{error:"Choose safe or help"}):(await q(e,n.id,t.id,l.status,"self",t.id),e_(200,{ok:!0})):e_(409,{error:"There is no headcount running"})}if("/api/emergency"===o){if(!ep(t,["guard","admin"]))return d;if("GET"===n)return e_(200,await A(e)??{emergency:null});let a=await C(e,t,l);return e_(a.status,a.body)}if("/api/guard/rounds"===o){if(!ep(t,["guard","admin"]))return d;if("POST"===n){let n="absent"===l.outcome?"absent":"present";if(!await B(e,t,String(l.studentId??""),n))return e_(404,{error:"Student not found"})}return e_(200,await z(e))}if("/api/guard/bootstrap"===o&&"GET"===n)return ep(t,["guard","admin"])?e_(200,await X(e)):d;if("/api/scans"===o&&"POST"===n){if(!ep(t,["guard","admin"]))return d;let n=function(e){let t=e?.scans;if(!Array.isArray(t)||0===t.length||t.length>500)return null;let n=[];for(let e of t){if("string"!=typeof e.clientId||e.clientId.length>64||"qr"!==e.method&&"manual"!==e.method||"string"!=typeof e.checkpointId||"number"!=typeof e.scannedAt)return null;n.push({clientId:e.clientId,method:e.method,raw:"string"==typeof e.raw?e.raw.slice(0,512):void 0,studentId:"string"==typeof e.studentId?e.studentId.slice(0,32):void 0,note:"string"==typeof e.note?e.note.slice(0,200):void 0,checkpointId:e.checkpointId,scannedAt:e.scannedAt,offline:!!e.offline})}return n}(l);return n?e_(200,{results:await ec(e,t,n)}):e_(400,{error:"Malformed scan batch"})}if(!o.startsWith("/api/admin/"))return e_(404,{error:"Not found"});if(!ep(t,["admin"]))return d;let c=Number(r.searchParams.get("rollCallId")),h=Number.isInteger(c)&&c>0?c:void 0;if("/api/admin/overview"===o){let t=await et(e,h);return t?e_(200,t):e_(404,{error:"Roll call not found"})}if("/api/admin/records"===o)return e_(200,{records:await ea(e,en(r.searchParams))});if("/api/admin/export"===o){let t;if("headcount"===r.searchParams.get("kind")){let n=Number(r.searchParams.get("emergencyId")),a=await A(e,Number.isInteger(n)&&n>0?n:void 0);if(!a)return e_(404,{error:"No headcount found"});t=(0,i.toCsv)(["Status","Likely inside","Student ID","Name","Hostel","Room","Time","How","Recorded by"],a.people.map(e=>[R[e.status],"unaccounted"===e.status&&e.likelyInside?"yes":"",e.student.id,e.student.name,e.student.hostel,e.student.room,e.at?(0,u.formatClock)(e.at):"",e.method?T[e.method]:"",e.by??""]))}else if("missing"===r.searchParams.get("kind")){let n=await et(e,h);t=(0,i.toCsv)(["Student ID","Name","Hostel","Room","Email","Last attempt","Attempt time","Attempt detail"],(n?.missing??[]).map(e=>[e.id,e.name,e.hostel,e.room,e.email,e.lastAttempt?m.RESULT_META[e.lastAttempt.result].label:"",e.lastAttempt?(0,u.formatClock)(e.lastAttempt.at):"",e.lastAttempt?.reason??""]))}else{let n=await ea(e,{...en(r.searchParams),limit:1e4});t=(0,i.toCsv)(["Date","Time","Roll call","Student ID","Name","Hostel","Room","Where","Method","Result","Detail","Scanned by","Recorded offline","Resolved by","Resolution note"],n.map(e=>[(0,u.formatDate)(e.scannedAt),(0,u.formatClock)(e.scannedAt,!0),e.rollCall,e.studentId??e.claimedId??"",e.studentName??"",e.hostel??"",e.room??"",e.checkpoint??"",e.method,m.RESULT_META[e.result].label,e.reason,e.scannedBy??"",e.offline?"yes":"no",e.resolvedBy??"",e.resolutionNote??""]))}return{status:200,contentType:"text/csv; charset=utf-8",body:`\uFEFF${t}`}}let g=/^\/api\/admin\/flags\/(\d+)$/.exec(o);if(g&&"POST"===n)return await f(e,t,Number(g[1]),String(l.note??"").slice(0,500))?e_(200,{ok:!0}):e_(409,{error:"Already resolved or not a flag"});if("/api/admin/rollcall"===o&&"POST"===n){if("new"===l.action)return e_(200,{rollCall:await p(e,t)});if("curfew"===l.action){let n=await _(e,t,Number(l.rollCallId),String(l.time));return n?e_(200,{rollCall:n}):e_(400,{error:"Invalid time"})}return e_(400,{error:"Unknown action"})}return"/api/admin/roster"===o?"POST"===n?e_(200,await y(e,t,String(l.csv??""))):e_(200,{students:await e.query("select id, name, email, hostel, room, active from students order by hostel, name")}):"/api/admin/roomtags"===o?e_(200,{tags:await w(e)}):"/api/admin/reset"===o&&"POST"===n?(await (0,E.resetDemoData)(e,eu),e_(200,{ok:!0})):e_(404,{error:"Not found"})}e.s(["createBackend",0,ef],76093)}]);
