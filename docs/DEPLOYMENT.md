@@ -34,8 +34,10 @@ The tables are created automatically on the first start, and demo data is added 
 1. **Import the students.** On the warden dashboard open **Students** and use **Import CSV** (`id,name,email,hostel,room`).
 2. **Print the room tags.** On the same tab press **Room tags**, then **Print**. There's one QR sticker per room, already signed. Stick each one inside its room, on the back of the door.
 3. **Set the hostel network.** Ask campus IT for the hostel Wi-Fi address ranges and put them in `CAMPUS_NETWORKS`. On a campus server these are the internal ranges (like `10.20.0.0/16`). If the app is hosted outside the campus, use the public addresses the hostel Wi-Fi goes out through. Behind a reverse proxy, the proxy must pass the client's address in `x-forwarded-for` (Vercel and Render do; for nginx add `proxy_set_header X-Forwarded-For $remote_addr;`).
-4. **Phones register themselves.** The first time a student checks in, that phone becomes their registered phone. When a student changes phone, the hostel office removes their row from `student_devices` and the next check-in registers the new one (and puts them on that night's spot checks).
+4. **Phones register themselves.** The first time a student checks in, that phone becomes their registered phone and sets up its passkey (the fingerprint / face check). When a student changes phone, the hostel office removes their row from `student_devices` and the next check-in registers the new one (and puts them on that night's spot checks).
+   Passkeys belong to the website's address. Pick the final address before students start using it: if it changes, every phone has to be registered again.
 5. **Set the curfew** under **Settings**. Room check-in opens 90 minutes before it.
+6. **Practise a headcount.** During a fire drill, start an **Emergency headcount** from the dashboard so students and guards see how it works before it matters.
 
 ## Option 0: GitHub Pages (browser-only demo)
 
@@ -101,7 +103,9 @@ npx cloudflared tunnel --url http://localhost:3000
 
 Open the `https://....trycloudflare.com` address it prints on your phone. Sign in as the guard on the phone and as a student on the laptop or a second phone.
 
-**2. Same Wi-Fi, without the camera.** Open `http://<your-laptop-ip>:3000` on the phone (the "Network" address shown when `npm run dev` starts). Everything works except the camera, so use **Manual entry** or a USB/Bluetooth barcode scanner.
+The tunnel gets a new address every time it starts, and passkeys belong to an address, so after restarting the tunnel reset the demo data (warden dashboard, **Settings**) before checking in again.
+
+**2. Same Wi-Fi, without the camera.** Open `http://<your-laptop-ip>:3000` on the phone (the "Network" address shown when `npm run dev` starts). The camera and the fingerprint check need https, so they won't work this way: use **Manual entry**, paste tag codes, or a USB/Bluetooth barcode scanner. Room check-ins go through without the fingerprint check and get a spot check.
 
 ## Before using it for real
 
@@ -112,4 +116,4 @@ Open the `https://....trycloudflare.com` address it prints on your phone. Sign i
 - [ ] Set `CAMPUS_NETWORKS` to the hostel Wi-Fi ranges, and check that a check-in over mobile data is refused
 - [ ] Print the room tags and stick one inside each room
 - [ ] Rename the gates and staff to match the campus (`checkpoints` and `staff` tables)
-- [ ] Serve everything over https
+- [ ] Serve everything over https, on the address you'll keep (the camera and passkeys need https, and passkeys are tied to the address)
