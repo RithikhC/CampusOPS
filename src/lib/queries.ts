@@ -1,11 +1,13 @@
 /** Read models for the three apps. Each returns plain JSON-safe objects. */
 import { config } from "./config";
 import type { Db } from "./dbcore";
+import { activeEmergency, headcount, type Emergency, type Headcount, type SafetyStatus } from "./emergency";
 import { PERIOD_SECONDS, periodAt, signPass } from "./pass";
 import { getOrCreateActiveRollCall, getRollCall, listRollCalls, type RollCall } from "./rollcall";
 import { checkInOpensAt } from "./roomcheck";
 import { buildRounds, type Rounds } from "./rounds";
 import { FLAG_RESULTS, PRESENT_RESULTS, type RosterEntry, type ScanMethod, type ScanResult } from "./verify";
+import { issueChallenge } from "./webauthn";
 
 const PRESENT_SQL = `('${PRESENT_RESULTS.join("','")}')`;
 const FLAG_SQL = `('${FLAG_RESULTS.join("','")}')`;
@@ -36,8 +38,13 @@ export interface StudentPassData {
   student: RosterEntry & { email: string };
   rollCall: RollCall;
   status: { result: ScanResult; at: string; checkpoint: string | null; method: ScanMethod } | null;
-  /** When room check-in opens tonight, and whether it is open now. */
-  roomCheckIn: { opensAt: string; open: boolean };
+  /**
+   * When room check-in opens tonight and whether it is open now, plus what the phone needs for the
+   * fingerprint check: a fresh challenge, and the passkey registered for this student (if any).
+   */
+  roomCheckIn: { opensAt: string; open: boolean; challenge: string; credentialId: string | null };
+  /** A headcount in progress, and this student's answer so far. */
+  emergency: { id: number; reason: string; startedAt: string; mine: { status: SafetyStatus; at: string } | null } | null;
   codes: { period: number; code: string }[];
   periodSeconds: number;
   serverNow: number;
@@ -61,6 +68,15 @@ export async function studentPass(db: Db, studentId: string): Promise<StudentPas
     [rollCall.id, studentId],
   );
 
+  const [device] = await db.query<{ credential_id: string | null }>(`select credential_id from student_devices where student_id = $1`, [studentId]);
+  const emergency = await activeEmergency(db);
+  const [mine] = emergency
+    ? await db.query<{ status: SafetyStatus; at: Date }>(
+        `select status, at from emergency_responses where emergency_id = $1 and student_id = $2`,
+        [emergency.id, studentId],
+      )
+    : [];
+
   const history = await db.query<{ name: string; starts_at: Date; result: ScanResult | null; scanned_at: Date | null }>(
     `select rc.name, rc.starts_at, s.result, s.scanned_at
        from roll_calls rc
@@ -81,7 +97,18 @@ export async function studentPass(db: Db, studentId: string): Promise<StudentPas
     student,
     rollCall,
     status: status ? { result: status.result, at: iso(status.scanned_at)!, checkpoint: status.checkpoint, method: status.method } : null,
-    roomCheckIn: { opensAt: new Date(checkInOpensAt(rollCall)).toISOString(), open: now >= checkInOpensAt(rollCall) },
+    roomCheckIn: {
+      opensAt: new Date(checkInOpensAt(rollCall)).toISOString(),
+      open: now >= checkInOpensAt(rollCall),
+      challenge: issueChallenge(studentId, now, config.qrSigningKey),
+      credentialId: device?.credential_id ?? null,
+    },
+    emergency: emergency && {
+      id: emergency.id,
+      reason: emergency.reason,
+      startedAt: emergency.startedAt,
+      mine: mine ? { status: mine.status, at: iso(mine.at)! } : null,
+    },
     codes,
     periodSeconds: PERIOD_SECONDS,
     serverNow: now,
@@ -99,12 +126,13 @@ export interface GuardBootstrap {
   publicKeyHex: string;
   serverNow: number;
   flagsOpen: number;
+  emergency: Emergency | null;
 }
 
 export async function guardBootstrap(db: Db): Promise<GuardBootstrap> {
   const now = Date.now();
   const rollCall = await getOrCreateActiveRollCall(db, now);
-  const [checkpoints, roster, present, [{ count }]] = await Promise.all([
+  const [checkpoints, roster, present, [{ count }], emergency] = await Promise.all([
     db.query<{ id: string; name: string }>(`select id, name from checkpoints order by hostel nulls last, name`),
     db.query<RosterEntry>(`select id, name, hostel, room from students where active order by name`),
     db.query<{ student_id: string; scanned_at: Date; checkpoint: string | null }>(
@@ -117,6 +145,7 @@ export async function guardBootstrap(db: Db): Promise<GuardBootstrap> {
       `select count(*)::int as count from scans where roll_call_id = $1 and result in ${FLAG_SQL} and resolved_at is null`,
       [rollCall.id],
     ),
+    activeEmergency(db),
   ]);
 
   return {
@@ -127,6 +156,7 @@ export async function guardBootstrap(db: Db): Promise<GuardBootstrap> {
     publicKeyHex: config.qrPublicKeyHex,
     serverNow: now,
     flagsOpen: count,
+    emergency,
   };
 }
 
@@ -200,6 +230,15 @@ export interface MissingStudent extends RosterEntry {
   lastAttempt: { result: ScanResult; at: string; reason: string } | null;
 }
 
+/** One room on the hostel map, and how each student in it stands tonight. */
+export interface MapRoom {
+  hostel: string;
+  room: string;
+  students: { id: string; name: string; state: RoomState }[];
+}
+/** in: confirmed. check: spot check not done yet. missing: no check-in. absent: not in the room when visited. */
+export type RoomState = "in" | "check" | "missing" | "absent";
+
 export interface AdminOverview {
   rollCall: RollCall;
   rollCalls: RollCall[];
@@ -208,6 +247,9 @@ export interface AdminOverview {
   /** How tonight's present students were confirmed. */
   verifiedBy: Record<ScanMethod, number>;
   rounds: Rounds;
+  rooms: MapRoom[];
+  /** A headcount in progress. */
+  emergency: Headcount | null;
   byHostel: { hostel: string; expected: number; present: number }[];
   arrivals: { at: string; count: number }[];
   trend: { id: number; name: string; startsAt: string; present: number; late: number }[];
@@ -221,7 +263,7 @@ export async function adminOverview(db: Db, rollCallId?: number): Promise<AdminO
   const rollCall = rollCallId ? await getRollCall(db, rollCallId) : await getOrCreateActiveRollCall(db, now);
   if (!rollCall) return null;
 
-  const [rollCalls, byHostel, counts, presentTimes, trend, feed, flags, missing, methods, rounds] = await Promise.all([
+  const [rollCalls, byHostel, counts, presentTimes, trend, feed, flags, missing, methods, rounds, roster, emergency] = await Promise.all([
     listRollCalls(db),
     db.query<{ hostel: string; expected: number; present: number }>(
       `select st.hostel, count(*)::int as expected, count(p.student_id)::int as present
@@ -274,6 +316,8 @@ export async function adminOverview(db: Db, rollCallId?: number): Promise<AdminO
       [rollCall.id],
     ),
     buildRounds(db, rollCall.id, now),
+    db.query<RosterEntry>(`select id, name, hostel, room from students where active order by hostel, room, name`),
+    headcount(db),
   ]);
 
   const count = (result: ScanResult) => counts.find((c) => c.result === result);
@@ -300,6 +344,8 @@ export async function adminOverview(db: Db, rollCallId?: number): Promise<AdminO
       manual: methods.find((m) => m.method === "manual")?.count ?? 0,
     },
     rounds: rounds!,
+    rooms: roomMap(roster, rounds!),
+    emergency,
     byHostel,
     arrivals: bucketArrivals(presentTimes.map((p) => new Date(p.scanned_at).getTime())),
     trend: trend.reverse().map((t) => ({ id: t.id, name: t.name, startsAt: iso(t.starts_at)!, present: t.present, late: t.late })),
@@ -314,6 +360,27 @@ export async function adminOverview(db: Db, rollCallId?: number): Promise<AdminO
       lastAttempt: m.attempt_result ? { result: m.attempt_result, at: iso(m.attempt_at)!, reason: m.attempt_reason ?? "" } : null,
     })),
   };
+}
+
+function roomMap(roster: RosterEntry[], rounds: Rounds): MapRoom[] {
+  const onList = new Map(rounds.items.map((item) => [item.student.id, item]));
+  const rooms = new Map<string, MapRoom>();
+  for (const student of roster) {
+    const item = onList.get(student.id);
+    const state: RoomState = !item
+      ? "in"
+      : item.visit
+        ? item.visit.outcome === "present"
+          ? "in"
+          : "absent"
+        : item.kind === "spot"
+          ? "check"
+          : "missing";
+    const key = `${student.hostel}|${student.room}`;
+    if (!rooms.has(key)) rooms.set(key, { hostel: student.hostel, room: student.room, students: [] });
+    rooms.get(key)!.students.push({ id: student.id, name: student.name, state });
+  }
+  return [...rooms.values()];
 }
 
 /** Check-ins per 15 minutes, for the arrivals chart. */

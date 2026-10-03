@@ -7,6 +7,7 @@ import { GuardApp } from "@/app/guard/GuardApp";
 import { StudentPass } from "@/app/student/StudentPass";
 import { phoneOf } from "@/lib/seed";
 import type { Role } from "@/lib/session";
+import { installFakeAuthenticator } from "./authenticator";
 import { installFakeCamera } from "./camera";
 import { demoUser, getBackend, installApiShim, isEmbedded } from "./client";
 
@@ -20,13 +21,23 @@ export default function DemoRole({ role }: { role: Role }) {
     installApiShim(user);
     if (embedded && role === "guard") installFakeCamera("gate");
     if (embedded && role === "student") installFakeCamera("room");
-    // In the demo each student's "phone" has a fixed ID that matches the sample data.
+    // In the demo each student's "phone" has a fixed ID that matches the sample data, and a
+    // simulated fingerprint sensor with the passkey the sample data registered for it.
     if (role === "student") {
+      const key = `np_device_${user.id}`;
       try {
-        window.localStorage.setItem(`np_device_${user.id}`, JSON.stringify(phoneOf(user.id)));
+        window.localStorage.setItem(key, JSON.stringify(phoneOf(user.id)));
       } catch {
         // Storage blocked: the check-in will register whatever ID the page makes up.
       }
+      installFakeAuthenticator(user.id, () => {
+        if (window.__nightpassDeviceOverride) return window.__nightpassDeviceOverride;
+        try {
+          return JSON.parse(window.localStorage.getItem(key) ?? "null") ?? phoneOf(user.id);
+        } catch {
+          return phoneOf(user.id);
+        }
+      });
     }
     void getBackend();
     return { user, embedded };

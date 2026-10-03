@@ -1,13 +1,18 @@
 "use client";
 
-import { CheckCircle2, Loader2, Wifi, X, XCircle } from "lucide-react";
-import { useState } from "react";
+import { CheckCircle2, Fingerprint, Loader2, Wifi, X, XCircle } from "lucide-react";
+import { useRef, useState } from "react";
 import { signal } from "@/components/feedback";
+import { confirmWithPasskey } from "@/components/passkey";
 import { Scanner } from "@/components/Scanner";
 import { storage, uid } from "@/components/ui";
 import type { RoomCheckInOutcome } from "@/lib/roomcheck";
 
-type Step = { name: "scan" } | { name: "sending" } | { name: "done"; outcome: RoomCheckInOutcome };
+type Step =
+  | { name: "scan" }
+  | { name: "confirm" }
+  | { name: "sending" }
+  | { name: "done"; outcome: RoomCheckInOutcome; fingerprint: boolean };
 
 /** A random ID kept on this phone. The first room check-in registers it to the student. */
 function deviceId(studentId: string): string {
@@ -21,21 +26,49 @@ function deviceId(studentId: string): string {
   return id;
 }
 
-export function RoomCheckIn({ studentId, room, onClose }: { studentId: string; room: string; onClose: (checkedIn: boolean) => void }) {
+export function RoomCheckIn({
+  studentId,
+  studentName,
+  room,
+  challenge,
+  credentialId,
+  onClose,
+}: {
+  studentId: string;
+  studentName: string;
+  room: string;
+  /** From the server, for the fingerprint check. */
+  challenge: string;
+  credentialId: string | null;
+  onClose: (checkedIn: boolean) => void;
+}) {
   const [step, setStep] = useState<Step>({ name: "scan" });
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [typed, setTyped] = useState("");
+  // The camera can read the tag several times before the screen updates; only the first read counts.
+  const busy = useRef(false);
 
   async function submit(tag: string) {
-    if (step.name !== "scan") return;
+    if (step.name !== "scan" || busy.current) return;
+    busy.current = true;
+    // The phone's own fingerprint / face check. Nothing biometric leaves the phone.
+    setStep({ name: "confirm" });
+    const attempt = await confirmWithPasskey({ studentId, studentName, challenge, credentialId });
     setStep({ name: "sending" });
     let outcome: RoomCheckInOutcome;
     try {
       const response = await fetch("/api/student/checkin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // simulateOffCampus is only honoured by the demo; a real server looks at the network itself.
-        body: JSON.stringify({ tag, deviceId: deviceId(studentId), simulateOffCampus: Boolean(window.__nightpassOffCampus) }),
+        body: JSON.stringify({
+          tag,
+          deviceId: deviceId(studentId),
+          challenge,
+          passkey: attempt.kind === "proof" ? attempt.proof : undefined,
+          passkeyFailed: attempt.kind === "failed",
+          // Only honoured by the demo; a real server looks at the network itself.
+          simulateOffCampus: Boolean(window.__nightpassOffCampus),
+        }),
       });
       const body = await response.json();
       outcome = response.ok ? body : { ok: false, result: "invalid", message: body.error ?? "Couldn't check in. Try again." };
@@ -43,7 +76,7 @@ export function RoomCheckIn({ studentId, room, onClose }: { studentId: string; r
       outcome = { ok: false, result: "invalid", message: "No connection. Room check-in needs the hostel Wi-Fi." };
     }
     signal(outcome.ok ? (outcome.result === "late" ? "warn" : "ok") : "bad", true);
-    setStep({ name: "done", outcome });
+    setStep({ name: "done", outcome, fingerprint: attempt.kind === "proof" });
     if (outcome.ok) window.setTimeout(() => onClose(true), 1800);
   }
 
@@ -67,8 +100,19 @@ export function RoomCheckIn({ studentId, room, onClose }: { studentId: string; r
             {step.outcome.ok ? <CheckCircle2 className="size-20" aria-hidden /> : <XCircle className="size-20" aria-hidden />}
             <div className="text-2xl font-bold">{step.outcome.ok ? "Checked in" : "Not checked in"}</div>
             <p className="max-w-xs text-lg">{step.outcome.message}</p>
+            {step.outcome.ok && step.fingerprint && (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-white/20 px-3 py-1 text-sm font-medium">
+                <Fingerprint className="size-4" aria-hidden /> Fingerprint confirmed
+              </span>
+            )}
             {!step.outcome.ok && (
-              <button onClick={() => setStep({ name: "scan" })} className="mt-2 rounded-xl bg-white/20 px-5 py-2.5 font-semibold">
+              <button
+                onClick={() => {
+                  busy.current = false;
+                  setStep({ name: "scan" });
+                }}
+                className="mt-2 rounded-xl bg-white/20 px-5 py-2.5 font-semibold"
+              >
                 Try again
               </button>
             )}
@@ -83,13 +127,25 @@ export function RoomCheckIn({ studentId, room, onClose }: { studentId: string; r
                 <span className="grid size-4 shrink-0 place-items-center rounded-sm border border-brand text-[9px] font-bold text-brand">QR</span>
                 Scan the NightPass tag on the back of your door.
               </li>
+              <li className="flex items-center gap-2">
+                <Fingerprint className="size-4 shrink-0 text-brand" aria-hidden /> Confirm it&apos;s you with your fingerprint or face.
+              </li>
             </ol>
 
             <section className="relative aspect-[4/5] overflow-hidden rounded-3xl bg-black ring-1 ring-line" aria-label="Tag scanner">
               {!cameraError && (
                 <Scanner paused={step.name !== "scan"} torch={false} onCode={submit} onTorchAvailable={() => undefined} onError={setCameraError} />
               )}
-              {cameraError && <p className="absolute inset-0 grid place-items-center p-6 text-center text-muted">{cameraError}</p>}
+              {cameraError && step.name === "scan" && (
+                <p className="absolute inset-0 grid place-items-center p-6 text-center text-muted">{cameraError}</p>
+              )}
+              {step.name === "confirm" && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70 p-6 text-center text-white">
+                  <Fingerprint className="size-14 text-brand" aria-hidden />
+                  <span className="text-lg font-semibold">Tag scanned. Now confirm it&apos;s you.</span>
+                  <span className="text-sm text-white/70">Use your fingerprint or face, the same way you unlock your phone.</span>
+                </div>
+              )}
               {step.name === "sending" && (
                 <div className="absolute inset-0 grid place-items-center bg-black/60">
                   <Loader2 className="size-10 animate-spin text-white" aria-label="Checking" />

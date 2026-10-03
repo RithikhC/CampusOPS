@@ -1,8 +1,8 @@
 "use client";
 
-import { CheckCircle2, Clock, DoorOpen, ShieldCheck, Sun, WifiOff } from "lucide-react";
-import { useEffect, useState } from "react";
-import { keepScreenOn, unlockAudio } from "@/components/feedback";
+import { CheckCircle2, Clock, DoorOpen, LifeBuoy, ShieldCheck, Siren, Sun, WifiOff } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { keepScreenOn, signal, unlockAudio } from "@/components/feedback";
 import { QrCode } from "@/components/QrCode";
 import { Avatar, Card, LogoutButton, Logo, ResultBadge, storage } from "@/components/ui";
 import { periodAt, periodStartMs } from "@/lib/pass";
@@ -29,7 +29,8 @@ export function StudentPass({ studentId }: { studentId: string }) {
   const [refresh, setRefresh] = useState(0);
 
   // Keep the pass fresh. Poll faster until checked in so the confirmation shows right after the scan.
-  const checkedIn = Boolean(data?.status);
+  // Once checked in, keep polling often enough that an emergency headcount reaches the phone quickly.
+  const checkedIn = Boolean(data?.status) && !data?.emergency;
   useEffect(() => {
     let cancelled = false;
 
@@ -54,7 +55,7 @@ export function StudentPass({ studentId }: { studentId: string }) {
     }
 
     void load();
-    const timer = window.setInterval(load, checkedIn ? 30_000 : 4_000);
+    const timer = window.setInterval(load, checkedIn ? 10_000 : 4_000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -64,7 +65,10 @@ export function StudentPass({ studentId }: { studentId: string }) {
   useEffect(() => {
     const tick = window.setInterval(() => setNow(Date.now()), 250);
     const release = keepScreenOn();
-    const goOnline = () => setOnline(true);
+    const goOnline = () => {
+      setOnline(true);
+      setRefresh((n) => n + 1);
+    };
     const goOffline = () => setOnline(false);
     window.addEventListener("online", goOnline);
     window.addEventListener("offline", goOffline);
@@ -75,6 +79,16 @@ export function StudentPass({ studentId }: { studentId: string }) {
       window.removeEventListener("offline", goOffline);
     };
   }, []);
+
+  // Sound and vibrate once when a headcount starts.
+  const alerted = useRef<number | null>(null);
+  const emergencyId = data?.emergency?.id ?? null;
+  useEffect(() => {
+    if (emergencyId && alerted.current !== emergencyId) {
+      alerted.current = emergencyId;
+      signal("bad", true);
+    }
+  }, [emergencyId]);
 
   const serverNow = now + offset;
   const period = periodAt(serverNow);
@@ -111,6 +125,8 @@ export function StudentPass({ studentId }: { studentId: string }) {
         <Logo subtitle="My night pass" />
         <LogoutButton compact />
       </header>
+
+      {data.emergency && <EmergencyCard emergency={data.emergency} onAnswered={() => setRefresh((n) => n + 1)} />}
 
       <Card className="flex items-center gap-3 p-4">
         <Avatar name={student.name} id={student.id} size={52} />
@@ -215,7 +231,10 @@ export function StudentPass({ studentId }: { studentId: string }) {
       {checkingIn && (
         <RoomCheckIn
           studentId={student.id}
+          studentName={student.name}
           room={student.room}
+          challenge={data.roomCheckIn.challenge}
+          credentialId={data.roomCheckIn.credentialId}
           onClose={(done) => {
             setCheckingIn(false);
             if (done) setRefresh((n) => n + 1);
@@ -244,5 +263,72 @@ export function StudentPass({ studentId }: { studentId: string }) {
         </Card>
       )}
     </main>
+  );
+}
+
+/** Shown at the top of the screen while the warden is running an emergency headcount. */
+function EmergencyCard({ emergency, onAnswered }: { emergency: NonNullable<StudentPassData["emergency"]>; onAnswered: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [changing, setChanging] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  async function answer(status: "safe" | "help") {
+    setBusy(true);
+    try {
+      const response = await fetch("/api/student/safety", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      if (!response.ok) throw new Error("failed");
+      setFailed(false);
+      setChanging(false);
+      onAnswered();
+    } catch {
+      setFailed(true);
+    }
+    setBusy(false);
+  }
+
+  const mine = changing ? null : emergency.mine;
+  return (
+    <section className="animate-result rounded-2xl bg-[#7f1d1d] p-4 text-white ring-2 ring-[#ef4444]" role="alert" aria-label="Emergency headcount">
+      <div className="flex items-center gap-2 text-lg font-bold">
+        <Siren className="size-6 shrink-0" aria-hidden /> Emergency headcount
+      </div>
+      <p className="mt-1 font-medium">{emergency.reason}</p>
+      {mine ? (
+        <div className="mt-3 flex items-center justify-between gap-3 rounded-xl bg-black/25 px-3 py-2.5">
+          <span className="flex items-center gap-2 font-semibold">
+            {mine.status === "safe" ? <CheckCircle2 className="size-5 text-[#4ade80]" aria-hidden /> : <LifeBuoy className="size-5" aria-hidden />}
+            {mine.status === "safe" ? `You're marked safe · ${formatClock(mine.at)}` : "Help is on the way. Stay where you are if it's safe."}
+          </span>
+          <button onClick={() => setChanging(true)} className="shrink-0 text-sm underline opacity-90">
+            Change
+          </button>
+        </div>
+      ) : (
+        <>
+          <p className="mt-1 text-sm text-white/85">Leave the building calmly and go to the assembly point. Then let the warden know you&apos;re safe.</p>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button
+              onClick={() => answer("safe")}
+              disabled={busy}
+              className="flex h-14 items-center justify-center gap-2 rounded-xl bg-white text-lg font-bold text-[#7f1d1d] active:scale-[0.98]"
+            >
+              <CheckCircle2 className="size-5" aria-hidden /> I&apos;m safe
+            </button>
+            <button
+              onClick={() => answer("help")}
+              disabled={busy}
+              className="flex h-14 items-center justify-center gap-2 rounded-xl bg-black/30 text-lg font-bold ring-2 ring-white/70 active:scale-[0.98]"
+            >
+              <LifeBuoy className="size-5" aria-hidden /> I need help
+            </button>
+          </div>
+        </>
+      )}
+      {failed && <p className="mt-2 text-sm">Couldn&apos;t send. Check your connection and try again, or tell a guard.</p>}
+    </section>
   );
 }

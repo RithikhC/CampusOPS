@@ -51,6 +51,7 @@ interface Row {
   room: string;
   presence_method: ScanMethod | null;
   presence_at: Date | null;
+  presence_verified: boolean | null;
   rejected: number;
   device_at: Date | null;
   missed: number;
@@ -75,7 +76,7 @@ export async function buildRounds(db: Db, rollCallId?: number, nowMs = Date.now(
 
   const rows = await db.query<Row>(
     `select st.id, st.name, st.hostel, st.room,
-            p.method as presence_method, p.scanned_at as presence_at,
+            p.method as presence_method, p.scanned_at as presence_at, p.user_verified as presence_verified,
             (select count(*)::int from scans r
               where r.roll_call_id = $1 and r.student_id = st.id and r.result in ('invalid', 'expired')) as rejected,
             d.registered_at as device_at,
@@ -118,6 +119,7 @@ export async function buildRounds(db: Db, rollCallId?: number, nowMs = Date.now(
 
     const reasons: string[] = [];
     if (row.rejected > 0) reasons.push("Had a rejected attempt tonight");
+    if (row.presence_verified === false) reasons.push("Checked in without a fingerprint check");
     if (row.device_at && new Date(row.device_at) >= startsAt) reasons.push("New phone registered tonight");
     if (row.missed >= MISSED_NIGHTS_THRESHOLD) reasons.push(`Missed ${row.missed} of the last 6 nights`);
     if (reasons.length === 0 && pickedAtRandom(row.id, rollCall.id)) reasons.push("Picked at random");

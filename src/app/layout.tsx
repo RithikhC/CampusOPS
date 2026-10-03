@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "NightPass · Campus night attendance",
-  description: "Night attendance for hostels: room check-in, smart rounds for the warden, and gate scanning.",
+  description: "Night attendance for hostels: room check-in with a fingerprint, smart rounds for the warden, gate scanning and emergency headcounts.",
   applicationName: "NightPass",
   appleWebApp: { capable: true, title: "NightPass", statusBarStyle: "black-translucent" },
 };

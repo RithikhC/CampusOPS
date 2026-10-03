@@ -1,9 +1,10 @@
 /**
  * Room check-in: a student confirms they are in their room without a warden knocking.
- * It only counts with three proofs together:
- *   1. the right phone   (the one registered to the student)
- *   2. the right place   (the signed tag inside their own room, scanned on the hostel network)
- *   3. the right time    (the check-in window before and after curfew)
+ * It only counts with these proofs together:
+ *   1. the right person  (the phone's own fingerprint / face check, through a passkey)
+ *   2. the right phone   (the one registered to the student)
+ *   3. the right place   (the signed tag inside their own room, scanned on the hostel network)
+ *   4. the right time    (the check-in window before and after curfew)
  * Rejected attempts are recorded, so the warden sees them and visits that room on rounds.
  */
 import { config } from "./config";
@@ -13,6 +14,7 @@ import { getOrCreateActiveRollCall, type RollCall } from "./rollcall";
 import { readRoomTag } from "./roomtag";
 import { formatClock } from "./time";
 import { PRESENT_RESULTS, type ScanResult } from "./verify";
+import { checkChallenge, verifyPasskey, type PasskeyProof } from "./webauthn";
 
 /** Room check-in opens this long before curfew. */
 export const CHECKIN_OPENS_MINUTES = 90;
@@ -27,6 +29,13 @@ export interface RoomCheckInInput {
   deviceId: string;
   /** Whether the request came from the hostel network. Decided by the server, never by the phone. */
   onCampus: boolean;
+  /** Fingerprint / face confirmation from the phone, answering `challenge`. */
+  passkey?: PasskeyProof | null;
+  challenge?: string;
+  /** The phone tried the fingerprint / face check and it failed or was cancelled. */
+  passkeyFailed?: boolean;
+  /** The website the request was made on, which a passkey is bound to. */
+  site?: { origin: string; rpId: string };
 }
 
 export interface RoomCheckInOutcome {
@@ -62,18 +71,21 @@ export async function roomCheckIn(db: Db, studentId: string, input: RoomCheckInI
     ).length > 0;
   if (await alreadyIn()) return { ok: true, result: "already", message: "You're already checked in for tonight." };
 
-  const record = (result: ScanResult, reason: string) =>
+  const record = (result: ScanResult, reason: string, userVerified: boolean | null = null) =>
     db.query(
-      `insert into scans (client_id, roll_call_id, student_id, claimed_id, scanned_by, method, result, reason, scanned_at, device_id)
-       values ($1, $2, $3, $3, 'student', 'self', $4, $5, $6, $7)`,
-      [crypto.randomUUID(), rollCall.id, studentId, result, reason, new Date(nowMs), input.deviceId.slice(0, 64)],
+      `insert into scans (client_id, roll_call_id, student_id, claimed_id, scanned_by, method, result, reason, scanned_at, device_id, user_verified)
+       values ($1, $2, $3, $3, 'student', 'self', $4, $5, $6, $7, $8)`,
+      [crypto.randomUUID(), rollCall.id, studentId, result, reason, new Date(nowMs), input.deviceId.slice(0, 64), userVerified],
     );
   const reject = async (reason: string, message: string): Promise<RoomCheckInOutcome> => {
     await record("invalid", reason);
     return { ok: false, result: "invalid", message };
   };
 
-  const [device] = await db.query<{ device_id: string }>(`select device_id from student_devices where student_id = $1`, [studentId]);
+  const [device] = await db.query<{ device_id: string; credential_id: string | null; public_key: string | null }>(
+    `select device_id, credential_id, public_key from student_devices where student_id = $1`,
+    [studentId],
+  );
   if (device && device.device_id !== input.deviceId) {
     return reject(
       "Room check-in tried from a phone that isn't registered to this student",
@@ -94,19 +106,71 @@ export async function roomCheckIn(db: Db, studentId: string, input: RoomCheckInI
     );
   }
 
+  // The right person: the phone's own fingerprint / face check, proven by a passkey signature.
+  let passkey: { credentialId: string; publicKey: string } | null = null;
+  if (input.passkeyFailed) {
+    return reject(
+      "Fingerprint or face check failed on the student's phone",
+      "Your fingerprint or face wasn't confirmed, so you're not checked in. Only you can check yourself in.",
+    );
+  }
+  if (input.passkey) {
+    if (!input.challenge || !checkChallenge(input.challenge, studentId, nowMs, publicKey)) {
+      return reject("Fingerprint check took too long or was reused", "That took too long. Try again.");
+    }
+    if (input.passkey.kind === "get" && input.passkey.credentialId !== device?.credential_id) {
+      return reject(
+        "Fingerprint check from a phone that isn't registered to this student",
+        "This isn't the phone registered to your account. Ask the hostel office to register your new phone.",
+      );
+    }
+    if (input.passkey.kind === "create" && device?.credential_id) {
+      return reject(
+        "Tried to set up a second fingerprint check for this student",
+        "Your phone is already set up. If you reset it, ask the hostel office to register it again.",
+      );
+    }
+    const check = verifyPasskey(input.passkey, {
+      challenge: input.challenge,
+      origin: input.site?.origin ?? "",
+      rpId: input.site?.rpId ?? "",
+      publicKey: device?.public_key,
+    });
+    if (!check.ok) {
+      return reject(`Fingerprint check failed: ${check.reason}`, "Your fingerprint or face couldn't be confirmed. Try again.");
+    }
+    passkey = { credentialId: input.passkey.credentialId, publicKey: check.publicKey };
+  } else if (device?.credential_id) {
+    return reject(
+      "Room check-in without the fingerprint check this phone is set up for",
+      "Confirm with your fingerprint or face to check in.",
+    );
+  }
+
   if (!device) {
     await db.query(
-      `insert into student_devices (student_id, device_id, registered_at) values ($1, $2, $3) on conflict (student_id) do nothing`,
-      [studentId, input.deviceId.slice(0, 64), new Date(nowMs)],
+      `insert into student_devices (student_id, device_id, registered_at, credential_id, public_key) values ($1, $2, $3, $4, $5)
+       on conflict (student_id) do nothing`,
+      [studentId, input.deviceId.slice(0, 64), new Date(nowMs), passkey?.credentialId ?? null, passkey?.publicKey ?? null],
     );
+  } else if (passkey && !device.credential_id) {
+    await db.query(`update student_devices set credential_id = $2, public_key = $3 where student_id = $1`, [
+      studentId,
+      passkey.credentialId,
+      passkey.publicKey,
+    ]);
   }
 
   const curfewAt = Date.parse(rollCall.curfewAt);
   const late = nowMs > curfewAt;
   try {
+    const without = passkey ? "" : ", without a fingerprint check";
     await record(
       late ? "late" : "valid",
-      late ? `Room check-in ${Math.ceil((nowMs - curfewAt) / 60_000)} min after curfew` : `Checked in from room ${student.room}`,
+      late
+        ? `Room check-in ${Math.ceil((nowMs - curfewAt) / 60_000)} min after curfew${without}`
+        : `Checked in from room ${student.room}${without}`,
+      Boolean(passkey),
     );
   } catch (error) {
     // A gate scan or the warden marked them present in the same moment.

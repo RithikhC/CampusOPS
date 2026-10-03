@@ -6,9 +6,11 @@ import { useCallback, useEffect, useState } from "react";
 import { BASE_PATH, Card, LogoutButton, Logo } from "@/components/ui";
 import type { AdminOverview } from "@/lib/queries";
 import { formatClock, formatDate } from "@/lib/time";
+import { EmergencyPanel, StartHeadcount } from "./Emergency";
+import { HostelMap } from "./HostelMap";
 import { FeedTab, FlagsTab, MissingTab, RecordsTab, RollCallTab, RosterTab, RoundsTab } from "./tabs";
 
-type Tab = "feed" | "rounds" | "missing" | "flags" | "records" | "roster" | "rollcall";
+type Tab = "feed" | "map" | "rounds" | "missing" | "flags" | "records" | "roster" | "rollcall";
 
 export function AdminApp({ adminName, demoMode }: { adminName: string; demoMode: boolean }) {
   const [rollCallId, setRollCallId] = useState<number | null>(null);
@@ -56,6 +58,7 @@ export function AdminApp({ adminName, demoMode }: { adminName: string; demoMode:
     { id: "feed", label: "Recent scans" },
     { id: "missing", label: "Not back yet", count: stats.missing },
     { id: "rounds", label: "Room rounds", count: data.rounds.summary.toVisit },
+    { id: "map", label: "Hostel map" },
     { id: "flags", label: "Needs review", count: stats.flagsOpen },
     { id: "records", label: "Search & export" },
     { id: "roster", label: "Students" },
@@ -81,6 +84,7 @@ export function AdminApp({ adminName, demoMode }: { adminName: string; demoMode:
               </option>
             ))}
           </select>
+          {!data.emergency && data.isLive && <StartHeadcount blocks={data.byHostel.map((h) => h.hostel)} onStarted={load} />}
           <Link
             href="/guard"
             className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-surface-2 px-3 text-sm ring-1 ring-line hover:ring-brand"
@@ -105,6 +109,8 @@ export function AdminApp({ adminName, demoMode }: { adminName: string; demoMode:
           {error ? <span className="text-warn">Connection lost, retrying…</span> : updatedAt && `Updated ${formatClock(updatedAt, true)}`}
         </span>
       </div>
+
+      {data.emergency && <EmergencyPanel count={data.emergency} rooms={data.rooms} onChanged={load} />}
 
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-5" aria-label="Summary">
         <Kpi icon={<CircleCheck className="size-5 text-ok" />} label="Checked in" value={stats.present} sub={`out of ${stats.expected} (${pct}%)`}>
@@ -188,6 +194,7 @@ export function AdminApp({ adminName, demoMode }: { adminName: string; demoMode:
         {tab === "feed" && <FeedTab records={data.feed} />}
         {tab === "missing" && <MissingTab missing={data.missing} rollCallId={rollCall.id} />}
         {tab === "rounds" && <RoundsTab rounds={data.rounds} />}
+        {tab === "map" && <HostelMap rooms={data.rooms} title={`Hostel map, ${rollCall.name}`} />}
         {tab === "flags" && <FlagsTab flags={data.flags} onResolved={load} />}
         {tab === "records" && <RecordsTab rollCalls={data.rollCalls} defaultRollCallId={rollCall.id} hostels={data.byHostel.map((h) => h.hostel)} />}
         {tab === "roster" && <RosterTab onImported={load} />}

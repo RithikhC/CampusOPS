@@ -9,6 +9,7 @@ import {
   MapPin,
   RefreshCw,
   ScanLine,
+  Siren,
   UserRoundSearch,
   Volume2,
   VolumeX,
@@ -34,6 +35,7 @@ import {
   type Verdict,
   type VerifyContext,
 } from "@/lib/verify";
+import { Headcount } from "./Headcount";
 import { ManualEntry } from "./ManualEntry";
 import { ResultOverlay } from "./ResultOverlay";
 import { Rounds } from "./Rounds";
@@ -70,7 +72,8 @@ export function GuardApp({ guardName }: { guardName: string }) {
   const [local, setLocal] = useState<{ rollCallId?: number; present: Record<string, Presence> }>({ present: {} });
   const [sound, setSound] = useState<boolean>(() => storage.get(KEYS.sound, true));
   const [now, setNow] = useState(() => Date.now());
-  const [mode, setMode] = useState<"gate" | "rounds">("gate");
+  const [mode, setMode] = useState<"gate" | "rounds" | "headcount">("gate");
+  const [shownEmergency, setShownEmergency] = useState<number | null>(null);
   const [scanning, setScanning] = useState(false);
   const [overlay, setOverlay] = useState<Verdict | null>(null);
   const [torch, setTorch] = useState(false);
@@ -312,6 +315,15 @@ export function GuardApp({ guardName }: { guardName: string }) {
     );
   }
 
+  // When a headcount starts, switch straight to it (once); when it ends, go back to the gate.
+  const emergency = boot.emergency ?? null;
+  if (emergency && emergency.id !== shownEmergency) {
+    setShownEmergency(emergency.id);
+    setMode("headcount");
+  }
+  const view = mode === "headcount" && !emergency ? "gate" : mode;
+  const modes = emergency ? (["headcount", "gate", "rounds"] as const) : (["gate", "rounds"] as const);
+
   const presentIds = new Set([...serverPresent.keys(), ...Object.keys(localPresent)]);
   const expected = boot.roster.length;
   const curfewAt = Date.parse(boot.rollCall.curfewAt);
@@ -326,20 +338,25 @@ export function GuardApp({ guardName }: { guardName: string }) {
         </div>
       </header>
 
-      <div className="grid grid-cols-2 gap-1 rounded-xl bg-surface p-1 ring-1 ring-line">
-        {(["gate", "rounds"] as const).map((m) => (
+      <div className={`grid gap-1 rounded-xl bg-surface p-1 ring-1 ring-line ${modes.length === 3 ? "grid-cols-3" : "grid-cols-2"}`}>
+        {modes.map((m) => (
           <button
             key={m}
             onClick={() => setMode(m)}
-            aria-pressed={mode === m}
-            className={`h-10 rounded-lg text-sm font-medium ${mode === m ? "bg-surface-2 text-text ring-1 ring-line" : "text-muted"}`}
+            aria-pressed={view === m}
+            className={`flex h-10 items-center justify-center gap-1 rounded-lg text-sm font-medium ${
+              m === "headcount" ? (view === m ? "bg-bad text-white" : "text-bad") : view === m ? "bg-surface-2 text-text ring-1 ring-line" : "text-muted"
+            }`}
           >
-            {m === "gate" ? "Gate scan" : "Room rounds"}
+            {m === "headcount" && <Siren className="size-4" aria-hidden />}
+            {m === "gate" ? "Gate scan" : m === "rounds" ? "Room rounds" : "Headcount"}
           </button>
         ))}
       </div>
 
-      {mode === "rounds" ? (
+      {view === "headcount" ? (
+        <Headcount sound={sound} />
+      ) : view === "rounds" ? (
         <Rounds />
       ) : (
         <>

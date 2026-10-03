@@ -2,11 +2,12 @@ import { NextResponse, type NextRequest } from "next/server";
 import { authorize } from "@/lib/auth";
 import { toCsv } from "@/lib/csv";
 import { getDb } from "@/lib/db";
+import { headcount, headcountCsv } from "@/lib/emergency";
 import { adminOverview, filtersFromSearchParams, searchRecords } from "@/lib/queries";
 import { formatClock, formatDate } from "@/lib/time";
 import { RESULT_META } from "@/lib/verify";
 
-/** CSV downloads: `kind=records` (filtered scan log) or `kind=missing` (who hasn't checked in). */
+/** CSV downloads: `kind=records` (filtered scan log), `kind=missing` (who hasn't checked in) or `kind=headcount`. */
 export async function GET(request: NextRequest) {
   const user = await authorize(["admin"]);
   if (user instanceof NextResponse) return user;
@@ -17,7 +18,13 @@ export async function GET(request: NextRequest) {
   let csv: string;
   let filename: string;
 
-  if (params.get("kind") === "missing") {
+  if (params.get("kind") === "headcount") {
+    const id = Number(params.get("emergencyId"));
+    const count = await headcount(db, Number.isInteger(id) && id > 0 ? id : undefined);
+    if (!count) return NextResponse.json({ error: "No headcount found" }, { status: 404 });
+    csv = headcountCsv(count);
+    filename = `nightpass-headcount-${stamp}.csv`;
+  } else if (params.get("kind") === "missing") {
     const id = Number(params.get("rollCallId"));
     const overview = await adminOverview(db, Number.isInteger(id) && id > 0 ? id : undefined);
     if (!overview) return NextResponse.json({ error: "Roll call not found" }, { status: 404 });

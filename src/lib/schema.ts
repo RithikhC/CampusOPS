@@ -53,11 +53,13 @@ create table if not exists scans (
   resolved_at      timestamptz,
   resolved_by      text,
   resolution_note  text,
-  device_id        text                         -- phone used for a room check-in
+  device_id        text,                        -- phone used for a room check-in
+  user_verified    boolean                      -- room check-in confirmed with fingerprint / face
 );
 
 -- Upgrades for databases created before room check-ins and rounds existed.
 alter table scans add column if not exists device_id text;
+alter table scans add column if not exists user_verified boolean;
 alter table scans drop constraint if exists scans_method_check;
 alter table scans add constraint scans_method_check check (method in ('qr', 'manual', 'self', 'round'));
 alter table scans drop constraint if exists scans_result_check;
@@ -68,8 +70,12 @@ alter table scans add constraint scans_result_check
 create table if not exists student_devices (
   student_id     text primary key references students(id) on delete cascade,
   device_id      text not null,
-  registered_at  timestamptz not null default now()
+  registered_at  timestamptz not null default now(),
+  credential_id  text,                          -- passkey on that phone (fingerprint / face unlock)
+  public_key     text                           -- its public key; the private key never leaves the phone
 );
+alter table student_devices add column if not exists credential_id text;
+alter table student_devices add column if not exists public_key text;
 
 -- What the warden found at the door during rounds: one row per student per night.
 create table if not exists room_visits (
@@ -86,6 +92,26 @@ create unique index if not exists scans_one_presence
   on scans (roll_call_id, student_id) where result in ('valid', 'late', 'manual');
 create index if not exists scans_by_roll_call on scans (roll_call_id, scanned_at desc);
 create index if not exists scans_by_student on scans (student_id, roll_call_id);
+
+-- Emergency headcount (fire alarm, evacuation): who is safe, who needs help, who is unaccounted for.
+create table if not exists emergencies (
+  id          integer generated always as identity primary key,
+  reason      text not null,
+  started_at  timestamptz not null,
+  started_by  text not null,
+  ended_at    timestamptz,
+  ended_by    text
+);
+
+create table if not exists emergency_responses (
+  emergency_id  integer not null references emergencies(id) on delete cascade,
+  student_id    text not null references students(id) on delete cascade,
+  status        text not null check (status in ('safe', 'help')),
+  method        text not null check (method in ('self', 'scan', 'staff')),
+  recorded_by   text not null,
+  at            timestamptz not null,
+  primary key (emergency_id, student_id)
+);
 
 create table if not exists audit_log (
   id      integer generated always as identity primary key,

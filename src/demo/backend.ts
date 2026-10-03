@@ -6,6 +6,7 @@
 import { importRoster, listRoomTags, resolveFlag, setCurfew, startNewRollCall } from "@/lib/admin";
 import { config } from "@/lib/config";
 import { toCsv } from "@/lib/csv";
+import { activeEmergency, emergencyAction, headcount, headcountCsv, markSafety } from "@/lib/emergency";
 import { prepareDb, type Db } from "@/lib/dbcore";
 import { periodAt, signPass } from "@/lib/pass";
 import { adminOverview, filtersFromSearchParams, guardBootstrap, searchRecords, studentPass } from "@/lib/queries";
@@ -17,6 +18,7 @@ import { resetDemoData, type SeedOptions } from "@/lib/seed";
 import type { Role, SessionUser } from "@/lib/session";
 import { formatClock, formatDate } from "@/lib/time";
 import { RESULT_META } from "@/lib/verify";
+import { parsePasskeyProof } from "@/lib/webauthn";
 
 const PGLITE_CDN = "https://cdn.jsdelivr.net/npm/@electric-sql/pglite@0.5.8/dist";
 /** The demo's roll call always runs "now", with curfew a little way off, whatever time it is opened. */
@@ -34,6 +36,8 @@ export interface DemoBackend {
   passCode(studentId: string, periodsAgo?: number): string;
   /** The tag stuck inside a student's room. */
   roomTag(studentId: string): Promise<string>;
+  /** The tag of any room (e.g. the room next door). */
+  roomTagFor(hostel: string, room: string): string;
   reset(): Promise<void>;
 }
 
@@ -72,6 +76,7 @@ export async function createBackend(): Promise<DemoBackend> {
       const [student] = await db.query<{ hostel: string; room: string }>(`select hostel, room from students where id = $1`, [studentId]);
       return signRoomTag(student.hostel, student.room, config.qrSigningKey);
     },
+    roomTagFor: (hostel, room) => signRoomTag(hostel, room, config.qrSigningKey),
     reset: () => resetDemoData(db, SEED),
   };
 }
@@ -105,8 +110,28 @@ async function route(db: Db, user: SessionUser, method: string, rawUrl: string, 
       tag: String(body.tag ?? ""),
       deviceId: String(body.deviceId ?? ""),
       onCampus: !body.simulateOffCampus,
+      challenge: typeof body.challenge === "string" ? body.challenge : undefined,
+      passkey: parsePasskeyProof(body.passkey),
+      passkeyFailed: body.passkeyFailed === true,
+      site: { origin: window.location.origin, rpId: window.location.hostname },
     });
     return json(200, outcome);
+  }
+
+  if (path === "/api/student/safety" && method === "POST") {
+    if (!allowed(user, ["student"])) return forbidden;
+    const emergency = await activeEmergency(db);
+    if (!emergency) return json(409, { error: "There is no headcount running" });
+    if (body.status !== "safe" && body.status !== "help") return json(400, { error: "Choose safe or help" });
+    await markSafety(db, emergency.id, user.id, body.status, "self", user.id);
+    return json(200, { ok: true });
+  }
+
+  if (path === "/api/emergency") {
+    if (!allowed(user, ["guard", "admin"])) return forbidden;
+    if (method === "GET") return json(200, (await headcount(db)) ?? { emergency: null });
+    const result = await emergencyAction(db, user, body);
+    return json(result.status, result.body);
   }
 
   if (path === "/api/guard/rounds") {
@@ -147,7 +172,12 @@ async function route(db: Db, user: SessionUser, method: string, rawUrl: string, 
 
   if (path === "/api/admin/export") {
     let csv: string;
-    if (url.searchParams.get("kind") === "missing") {
+    if (url.searchParams.get("kind") === "headcount") {
+      const id = Number(url.searchParams.get("emergencyId"));
+      const count = await headcount(db, Number.isInteger(id) && id > 0 ? id : undefined);
+      if (!count) return json(404, { error: "No headcount found" });
+      csv = headcountCsv(count);
+    } else if (url.searchParams.get("kind") === "missing") {
       const overview = await adminOverview(db, rollCallId);
       csv = toCsv(
         ["Student ID", "Name", "Hostel", "Room", "Email", "Last attempt", "Attempt time", "Attempt detail"],

@@ -21,9 +21,9 @@ declare global {
 }
 
 export const DEMO_STUDENTS = [
-  { id: DEMO_STUDENT_IDS[0], name: "Aarav Mehta" },
-  { id: DEMO_STUDENT_IDS[1], name: "Fatima Al Mansoori" },
-  { id: DEMO_STUDENT_IDS[2], name: "Rohan Pillai" },
+  { id: DEMO_STUDENT_IDS[0], name: "Aarav Mehta", hostel: "A-Block", room: "A-214", nextDoor: "A-215" },
+  { id: DEMO_STUDENT_IDS[1], name: "Fatima Al Mansoori", hostel: "B-Block", room: "B-108", nextDoor: "B-109" },
+  { id: DEMO_STUDENT_IDS[2], name: "Rohan Pillai", hostel: "C-Block", room: "C-305", nextDoor: "C-306" },
 ];
 
 export function isEmbedded(): boolean {

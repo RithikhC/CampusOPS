@@ -4,6 +4,7 @@
  * Deterministic, so every reset produces the same people.
  */
 import type { Db } from "./dbcore";
+import { demoPasskey } from "./demopasskey";
 import { defaultRollCallWindow, DEFAULT_CURFEW, insertRollCall } from "./rollcall";
 import { campusHour, campusTime, formatClock, formatDate } from "./time";
 import type { ScanResult } from "./verify";
@@ -59,6 +60,8 @@ interface SeedScan {
   scannedBy: string;
   method: "qr" | "manual" | "self";
   deviceId?: string;
+  /** Room check-ins: confirmed with the phone's fingerprint / face check. */
+  userVerified?: boolean;
   result: ScanResult;
   reason: string;
   scannedAt: number;
@@ -135,13 +138,15 @@ function buildNight(
     const self = !manual && random() < 0.62;
     const minutesLate = Math.ceil((scannedAt - opts.curfewMs) / 60_000);
     let result: ScanResult = "valid";
-    let reason = self ? `Checked in from room ${student.room}` : "Checked in";
+    const verified = self && hasFingerprintLock(student.id);
+    const without = self && !verified ? ", without a fingerprint check" : "";
+    let reason = self ? `Checked in from room ${student.room}${without}` : "Checked in";
     if (manual) {
       result = "manual";
       reason = `Manual entry: ${MANUAL_REASONS[--manualLeft % MANUAL_REASONS.length]}`;
     } else if (scannedAt > opts.curfewMs) {
       result = "late";
-      reason = self ? `Room check-in ${minutesLate} min after curfew` : `${minutesLate} min after curfew`;
+      reason = self ? `Room check-in ${minutesLate} min after curfew${without}` : `${minutesLate} min after curfew`;
     }
     presentAt.set(student.id, { at: scannedAt, gate: self ? "room check-in" : gate.name, self });
     scans.push({
@@ -157,6 +162,7 @@ function buildNight(
       scannedAt,
       offline: !self && gate.id === "gate-c" && random() < 0.3,
       deviceId: self ? phoneOf(student.id) : undefined,
+      userVerified: self ? verified : undefined,
     });
   }
 
@@ -258,6 +264,9 @@ function buildNight(
     if (absent.length) {
       scans.push(selfAttempt(pick(absent), "Room check-in tried from a phone that isn't registered to this student", Math.round(opts.fromMs + span * 0.85), "another-phone"));
     }
+    if (absent.length) {
+      scans.push(selfAttempt(pick(absent), "Fingerprint or face check failed on the student's phone", Math.round(opts.fromMs + span * 0.9)));
+    }
     const wrongRoom = present.find((s) => presentAt.get(s.id)!.self);
     if (wrongRoom) {
       const neighbour = `${wrongRoom.room.slice(0, -1)}${(Number(wrongRoom.room.slice(-1)) + 1) % 10}`;
@@ -293,7 +302,7 @@ async function insertScans(db: Db, scans: SeedScan[]) {
       ["client_id", "text"], ["roll_call_id", "int"], ["student_id", "text"], ["claimed_id", "text"], ["checkpoint_id", "text"],
       ["scanned_by", "text"], ["method", "text"], ["result", "text"], ["reason", "text"], ["scanned_at", "timestamptz"],
       ["received_at", "timestamptz"], ["offline", "boolean"], ["resolved_at", "timestamptz"], ["resolved_by", "text"],
-      ["resolution_note", "text"], ["device_id", "text"],
+      ["resolution_note", "text"], ["device_id", "text"], ["user_verified", "boolean"],
     ],
     scans.map((s) => [
       s.clientId, s.rollCallId, s.studentId, s.claimedId, s.checkpointId, s.scannedBy, s.method,
@@ -304,6 +313,7 @@ async function insertScans(db: Db, scans: SeedScan[]) {
       s.resolved?.by ?? null,
       s.resolved?.note ?? null,
       s.deviceId ?? null,
+      s.userVerified ?? null,
     ]),
   );
 }
@@ -321,6 +331,13 @@ export interface SeedOptions {
 /** The phone each seeded student is registered with. */
 export const phoneOf = (studentId: string) => `phone-${studentId}`;
 
+/** About 1 in 12 sample phones has no fingerprint or face lock set up. Stable per student. */
+function hasFingerprintLock(studentId: string): boolean {
+  let hash = 7;
+  for (const ch of studentId) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  return hash % 12 !== 0;
+}
+
 export async function seedDemoData(db: Db, nowMs = Date.now(), options: SeedOptions = {}): Promise<void> {
   const random = prng(2026);
   const students = buildStudents(random);
@@ -331,13 +348,19 @@ export async function seedDemoData(db: Db, nowMs = Date.now(), options: SeedOpti
   await insertMany(db, "students", text("id", "name", "email", "hostel", "room"), students.map((s) => [s.id, s.name, s.email, s.hostel, s.room]));
   // Everyone except the demo students already has a registered phone. The demo students register
   // theirs with their first room check-in, which puts them on tonight's spot-check list.
+  // In the browser demo the demo students' phones are also set up with a (software) passkey, so
+  // their check-ins ask for a fingerprint straight away.
+  const passkeyFor = (s: SeedStudent) => {
+    if (DEMO_STUDENT_IDS.includes(s.id)) return demoPasskey(s.id, phoneOf(s.id));
+    return hasFingerprintLock(s.id) ? { credentialId: `seed-${s.id}`, publicKey: null } : null;
+  };
   await insertMany(
     db,
     "student_devices",
-    [["student_id", "text"], ["device_id", "text"], ["registered_at", "timestamptz"]],
+    [["student_id", "text"], ["device_id", "text"], ["registered_at", "timestamptz"], ["credential_id", "text"], ["public_key", "text"]],
     students
       .filter((s) => options.registerDemoPhones || !DEMO_STUDENT_IDS.includes(s.id))
-      .map((s) => [s.id, phoneOf(s.id), new Date(nowMs - 30 * 24 * 60 * 60_000)]),
+      .map((s) => [s.id, phoneOf(s.id), new Date(nowMs - 30 * 24 * 60 * 60_000), passkeyFor(s)?.credentialId ?? null, passkeyFor(s)?.publicKey ?? null]),
   );
   const scans: SeedScan[] = [];
 
@@ -394,6 +417,6 @@ export async function seedDemoData(db: Db, nowMs = Date.now(), options: SeedOpti
 }
 
 export async function resetDemoData(db: Db, options: SeedOptions = {}): Promise<void> {
-  await db.exec(`truncate scans, roll_calls, students, staff, checkpoints, audit_log restart identity cascade`);
+  await db.exec(`truncate scans, roll_calls, students, staff, checkpoints, emergencies, audit_log restart identity cascade`);
   await seedDemoData(db, Date.now(), options);
 }

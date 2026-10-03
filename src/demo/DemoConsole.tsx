@@ -1,6 +1,6 @@
 "use client";
 
-import { Clock, DoorOpen, ExternalLink, Loader2, RotateCcw, ScanLine, Smartphone, Wifi, WifiOff } from "lucide-react";
+import { Clock, DoorOpen, ExternalLink, Loader2, RotateCcw, ScanLine, Siren, Smartphone, Wifi, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Logo } from "@/components/ui";
 import { parseCsv } from "@/lib/csv";
@@ -134,9 +134,12 @@ export default function DemoConsole() {
     async (periodsAgo = 0, who = studentId) => {
       const guard = frameWindow("guard");
       if (!guard) return;
-      if (find("guard", "Start scanning")) {
-        await tap("guard", "Start scanning");
-        await new Promise((resolve) => window.setTimeout(resolve, 900));
+      for (const start of ["Start scanning", "Scan passes at the assembly point"]) {
+        if (find("guard", start)) {
+          await tap("guard", start);
+          await new Promise((resolve) => window.setTimeout(resolve, 900));
+          break;
+        }
       }
       const code = (await backend).passCode(who, periodsAgo);
       guard.__nightpassCamera?.show(code);
@@ -145,23 +148,85 @@ export default function DemoConsole() {
   );
 
   /**
-   * The student checks in from their room: opens the check-in screen and points the phone at the
-   * tag on the door. Options simulate doing it from outside the hostel, or on someone else's phone.
+   * The student checks in from their room: opens the check-in screen, points the phone at the tag
+   * on the door, and confirms with a fingerprint. Options simulate doing it from outside the
+   * hostel, on someone else's phone, with someone else's finger, or from the room next door.
    */
   const roomCheckIn = useCallback(
-    async (options: { offCampus?: boolean; otherPhone?: boolean } = {}, who = studentId) => {
+    async (options: { offCampus?: boolean; otherPhone?: boolean; wrongFinger?: boolean; nextDoor?: boolean } = {}, who = studentId) => {
       const student = frameWindow("student");
       if (!student) return false;
       student.__nightpassOffCampus = Boolean(options.offCampus);
       student.__nightpassDeviceOverride = options.otherPhone ? "a-friends-phone" : undefined;
+      student.__nightpassFingerprint = options.wrongFinger ? "fail" : undefined;
       if (find("student", "Try again")) await tap("student", "Try again");
       else if (!(await tap("student", "Check in from my room"))) return false;
       await new Promise((resolve) => window.setTimeout(resolve, 1300));
-      student.__nightpassCamera?.show(await (await backend).roomTag(who), 2800, "tag");
+      const api = await backend;
+      const info = DEMO_STUDENTS.find((s) => s.id === who)!;
+      const tag = options.nextDoor ? api.roomTagFor(info.hostel, info.nextDoor) : await api.roomTag(who);
+      student.__nightpassCamera?.show(tag, 2400, "tag");
       return true;
     },
     [backend, find, frameWindow, studentId, tap],
   );
+
+  /** Tells a screen its connection is back, so it refreshes now instead of at its next poll. */
+  const nudge = useCallback(
+    (device: Device) => {
+      const win = frameWindow(device);
+      if (win && !(device === "guard" && win.__nightpassOffline)) win.dispatchEvent(new win.Event("online"));
+    },
+    [frameWindow],
+  );
+
+  /** The warden starts a fire-alarm headcount from the dashboard; the phones pick it up. */
+  const startHeadcount = useCallback(async () => {
+    if (!(await tap("admin", "Emergency headcount"))) return false;
+    await new Promise((resolve) => window.setTimeout(resolve, 700));
+    await tap("admin", "Start headcount");
+    await new Promise((resolve) => window.setTimeout(resolve, 600));
+    nudge("student");
+    nudge("guard");
+    return true;
+  }, [nudge, tap]);
+
+  /**
+   * Students reaching the assembly point during a headcount: most tap "I'm safe" on their phones,
+   * one asks for help. The demo students are left for the person trying the demo.
+   */
+  const evacuate = useCallback(async () => {
+    const api = await backend;
+    const warden = { id: "admin-1", name: "Warden", role: "admin" as const };
+    const count = JSON.parse((await api.handle(warden, "GET", "/api/emergency", null)).body) as {
+      emergency: unknown;
+      people?: { student: { id: string; name: string }; status: string; likelyInside: boolean }[];
+    };
+    if (!count.emergency || !count.people) return;
+    const waiting = count.people.filter((p) => p.status === "unaccounted" && !DEMO_STUDENTS.some((d) => d.id === p.student.id));
+    // Nearly everyone who was inside gets out; fewer of the rest report in (many are away for the night).
+    const leaving = waiting.filter((p, i) => (i * 37) % 100 < (p.likelyInside ? 91 : 55));
+    for (let i = 0; i < leaving.length; i += 10) {
+      await Promise.all(
+        leaving.slice(i, i + 10).map((p, j) =>
+          api.handle(
+            { id: p.student.id, name: p.student.name, role: "student" },
+            "POST",
+            "/api/student/safety",
+            JSON.stringify({ status: i === 40 && j === 3 ? "help" : "safe" }),
+          ),
+        ),
+      );
+      await new Promise((resolve) => window.setTimeout(resolve, 180));
+    }
+  }, [backend]);
+
+  const endHeadcount = useCallback(async () => {
+    const api = await backend;
+    await api.handle({ id: "admin-1", name: "Warden", role: "admin" }, "POST", "/api/emergency", JSON.stringify({ action: "end" }));
+    nudge("student");
+    nudge("guard");
+  }, [backend, nudge]);
 
   /** Clicks a button inside the card or row that mentions `rowText` (e.g. "In room" for one student). */
   const tapWithin = useCallback(
@@ -243,6 +308,10 @@ export default function DemoConsole() {
       roomCheckIn,
       tapWithin,
       curfewPasses,
+      nudge,
+      startHeadcount,
+      evacuate,
+      endHeadcount,
       showCsv,
       hideCsv: () => setCsv(null),
       setStudent: setStudentId,
@@ -256,7 +325,7 @@ export default function DemoConsole() {
       ready: () => backend.then(() => true),
     };
     (window as unknown as { __nightpassDirector: typeof director }).__nightpassDirector = director;
-  }, [tap, typeText, showPass, roomCheckIn, tapWithin, curfewPasses, showCsv, setOffline, reset, setCurfew, frameWindow, backend]);
+  }, [tap, typeText, showPass, roomCheckIn, tapWithin, curfewPasses, nudge, startHeadcount, evacuate, endHeadcount, showCsv, setOffline, reset, setCurfew, frameWindow, backend]);
 
   const scale = Math.min(present ? 2 : 1.1, (width - (present ? 0 : 32)) / DESIGN_W);
   const small = !present && width < 900;
@@ -347,12 +416,12 @@ export default function DemoConsole() {
 
       <section className="mx-auto max-w-[1800px] px-4 sm:px-6">
         <p className="max-w-3xl text-[#c7cfdd]">
-          This is the real NightPass app with sample data, running entirely in your browser. Follow the three steps below and
-          watch the student&apos;s phone, the warden&apos;s phone and the dashboard. You can also tap around inside any of the screens.
+          This is the real NightPass app with sample data, running entirely in your browser. Follow the steps below and watch
+          the student&apos;s phone, the warden&apos;s phone and the dashboard. You can also tap around inside any of the screens.
         </p>
 
         {!small && (
-          <div className="mt-5 grid gap-3 xl:grid-cols-3">
+          <div className="mt-5 grid gap-3 lg:grid-cols-2">
             <ControlGroup step="1" title="In the room, before curfew">
               <label className="flex h-10 items-center gap-2 rounded-lg bg-white/5 px-3 text-sm ring-1 ring-white/10">
                 Student
@@ -367,22 +436,22 @@ export default function DemoConsole() {
               <button onClick={() => roomCheckIn()} disabled={!ready} className={`${controlBtn} bg-[#2563eb] text-white hover:bg-[#1d4ed8]`}>
                 <DoorOpen className="size-4" aria-hidden /> {firstName} checks in from the room
               </button>
+              <span className="w-full text-sm text-[#8b95a8]">Or try to cheat:</span>
+              <button onClick={() => roomCheckIn({ nextDoor: true })} disabled={!ready} className={`${controlBtn} bg-white/10 hover:bg-white/15`}>
+                From the room next door
+              </button>
               <button onClick={() => roomCheckIn({ offCampus: true })} disabled={!ready} className={`${controlBtn} bg-white/10 hover:bg-white/15`}>
-                Try it from outside the hostel
+                From outside the hostel
               </button>
               <button onClick={() => roomCheckIn({ otherPhone: true })} disabled={!ready} className={`${controlBtn} bg-white/10 hover:bg-white/15`}>
-                Try it from a friend&apos;s phone
+                From a friend&apos;s phone
+              </button>
+              <button onClick={() => roomCheckIn({ wrongFinger: true })} disabled={!ready} className={`${controlBtn} bg-white/10 hover:bg-white/15`}>
+                With someone else&apos;s finger
               </button>
             </ControlGroup>
 
-            <ControlGroup step="2" title="After curfew: the warden's rounds">
-              <button onClick={curfewPasses} disabled={!ready} className={`${controlBtn} bg-[#2563eb] text-white hover:bg-[#1d4ed8]`}>
-                <Clock className="size-4" aria-hidden /> Curfew passes: start the rounds
-              </button>
-              <span className="text-sm text-[#8b95a8]">Then tap In room or Not in room on the warden&apos;s phone.</span>
-            </ControlGroup>
-
-            <ControlGroup step="3" title="At the gate, for late arrivals">
+            <ControlGroup step="2" title="At the gate, for late arrivals">
               <button onClick={() => showPass(0)} disabled={!ready} className={`${controlBtn} bg-white/10 hover:bg-white/15`}>
                 <ScanLine className="size-4" aria-hidden /> Hold {firstName}&apos;s pass up to the scanner
               </button>
@@ -393,7 +462,35 @@ export default function DemoConsole() {
                 {offline ? <WifiOff className="size-4 text-[#fbbf24]" aria-hidden /> : <Wifi className="size-4" aria-hidden />}
                 {offline ? "Scanner is offline (tap to reconnect)" : "Take the scanner offline"}
               </button>
-              <button onClick={reset} disabled={!ready} className={`${controlBtn} text-[#c7cfdd] hover:bg-white/10`}>
+              <span className="w-full text-sm text-[#8b95a8]">No phone? Use Manual entry on the guard&apos;s phone.</span>
+            </ControlGroup>
+
+            <ControlGroup step="3" title="After curfew: the warden's rounds">
+              <button onClick={curfewPasses} disabled={!ready} className={`${controlBtn} bg-[#2563eb] text-white hover:bg-[#1d4ed8]`}>
+                <Clock className="size-4" aria-hidden /> Curfew passes: start the rounds
+              </button>
+              <span className="w-full text-sm text-[#8b95a8]">
+                Then tap In room or Not in room on the warden&apos;s phone, and open Hostel map on the dashboard.
+              </span>
+            </ControlGroup>
+
+            <ControlGroup step="4" title="Emergency at night">
+              <button onClick={startHeadcount} disabled={!ready} className={`${controlBtn} bg-[#b91c1c] text-white hover:bg-[#991b1b]`}>
+                <Siren className="size-4" aria-hidden /> Fire alarm: start a headcount
+              </button>
+              <button onClick={() => tap("student", "I'm safe")} disabled={!ready} className={`${controlBtn} bg-white/10 hover:bg-white/15`}>
+                {firstName} taps I&apos;m safe
+              </button>
+              <button onClick={evacuate} disabled={!ready} className={`${controlBtn} bg-white/10 hover:bg-white/15`}>
+                Other students reach the assembly point
+              </button>
+              <button onClick={() => showPass(0)} disabled={!ready} className={`${controlBtn} bg-white/10 hover:bg-white/15`}>
+                Scan {firstName}&apos;s pass at the assembly point
+              </button>
+              <button onClick={endHeadcount} disabled={!ready} className={`${controlBtn} bg-white/10 hover:bg-white/15`}>
+                End headcount
+              </button>
+              <button onClick={reset} disabled={!ready} className={`${controlBtn} ml-auto text-[#c7cfdd] hover:bg-white/10`}>
                 <RotateCcw className="size-4" aria-hidden /> Reset demo
               </button>
             </ControlGroup>
@@ -427,7 +524,8 @@ export default function DemoConsole() {
 
       {!small && (
         <p className="mx-auto mt-6 max-w-[1800px] px-4 text-sm text-[#8b95a8] sm:px-6">
-          The two phones here use simulated cameras, because a webcam can&apos;t see things drawn on the same screen. The demo
+          The two phones here use simulated cameras, because a webcam can&apos;t see things drawn on the same screen, and the
+          student&apos;s phone has a simulated fingerprint sensor (it signs with a real passkey format, checked the same way). The demo
           roll call always runs now, with curfew about 25 minutes away, whatever time you open it. Open
           the{" "}
           <a className="underline" href={`${BASE_PATH}/guard/`}>
